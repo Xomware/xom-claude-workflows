@@ -1,0 +1,135 @@
+---
+name: "Scheduled Workflow Triggers"
+description: "CRON schedules for automated workflow execution"
+
+schedules:
+  hourly-pr-review:
+    workflow: code-review
+    cron: "0 * * * *"
+    description: "Review pending PRs hourly"
+    timezone: "America/New_York"
+    inputs:
+      review_type: full
+      auto_approve: false
+    enabled: true
+    backoff_on_failure: exponential
+    max_consecutive_failures: 3
+
+  daily-code-review:
+    workflow: code-review
+    cron: "0 10 * * *"
+    description: "Daily code review check at 10 AM"
+    timezone: "America/New_York"
+    inputs:
+      review_type: full
+    enabled: true
+    notifications:
+      on_success: slack
+      on_failure: slack
+
+  weekly-kb-generation:
+    workflow: kb-generation
+    cron: "0 0 * * 0"
+    description: "Generate KB weekly on Sundays at midnight"
+    timezone: "America/New_York"
+    inputs:
+      source_type: all
+      repo: "auto-detect"
+      auto_publish: false
+    enabled: true
+    notifications:
+      on_completion: slack
+
+  daily-staging-deploy:
+    workflow: automated-deployment
+    cron: "0 2 * * *"
+    description: "Deploy to staging daily at 2 AM"
+    timezone: "America/New_York"
+    inputs:
+      target_env: staging
+      require_approval: false
+    enabled: true
+    timeout: 1200s
+    notifications:
+      on_failure: [slack, email]
+
+  weekly-research:
+    workflow: research-pipeline
+    cron: "0 9 * * 1"
+    description: "Weekly research on Mondays at 9 AM"
+    timezone: "America/New_York"
+    inputs:
+      scope: broad
+      output_format: report
+    enabled: true
+    notifications:
+      on_completion: slack
+
+  daily-data-analysis:
+    workflow: data-analysis
+    cron: "0 6 * * *"
+    description: "Daily data analysis at 6 AM"
+    timezone: "America/New_York"
+    inputs:
+      analysis_type: exploratory
+      output_format: report
+    enabled: true
+    notifications:
+      on_completion: slack
+
+  incident-check:
+    workflow: incident-response
+    description: "No schedule - triggered by webhooks only"
+    enabled: true
+    manual_trigger: true
+
+  feature-generation:
+    workflow: feature-implementation
+    description: "Manual or issue-triggered only"
+    enabled: true
+    manual_trigger: true
+
+maintenance-schedules:
+  cleanup-old-runs:
+    cron: "0 3 * * *"
+    description: "Clean up old workflow runs daily at 3 AM"
+    retention_days: 30
+    enabled: true
+
+  update-agent-status:
+    cron: "0 */6 * * *"
+    description: "Update agent status every 6 hours"
+    enabled: true
+
+  backup-workflows:
+    cron: "0 4 * * 0"
+    description: "Weekly backup of workflow definitions"
+    enabled: true
+
+priority-overrides:
+  critical-incident-research:
+    workflows: [incident-response, research-pipeline]
+    priority: critical
+    timeout_override: 3600s
+
+configuration:
+  timezone_default: "America/New_York"
+  retry_failed_executions: true
+  max_retries: 3
+  retry_backoff: exponential
+  concurrency_limit: 5
+  
+monitoring:
+  slack_notifications:
+    success: true
+    failure: true
+    timeout: true
+  
+  metrics_collection:
+    enabled: true
+    retention_days: 90
+
+  alerting:
+    on_missed_schedule: true
+    on_repeated_failure: true
+    alert_channel: "#alerts"

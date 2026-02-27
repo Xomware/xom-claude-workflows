@@ -1,0 +1,149 @@
+---
+# Sequential Workflow Template
+# Use this template for workflows where each step must complete before the next begins.
+# Output of each step flows to the next.
+
+version: "1.0"
+name: "sequential-workflow-template"
+description: "Template for sequential, step-by-step workflows"
+
+inputs:
+  input_param_1:
+    type: string
+    description: "First input parameter"
+    required: true
+  input_param_2:
+    type: string
+    description: "Second input parameter"
+    required: false
+    default: "default_value"
+
+outputs:
+  final_result:
+    type: string
+    description: "Final workflow output"
+  execution_summary:
+    type: object
+    description: "Summary of all steps executed"
+
+triggers:
+  - type: manual
+    description: "Manual trigger via CLI"
+  - type: webhook
+    path: "/workflows/sequential"
+    method: POST
+
+steps:
+  # Step 1: Input validation and preparation
+  - id: validate-input
+    name: "Validate Input"
+    description: "Validate and prepare input parameters"
+    agent: claude-sonnet
+    timeout: 30s
+    input:
+      parameter_1: ${{ inputs.input_param_1 }}
+      parameter_2: ${{ inputs.input_param_2 }}
+    output:
+      validated_data: object
+      is_valid: boolean
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  # Step 2: Process with first agent
+  - id: process-step-1
+    name: "First Processing Step"
+    description: "Initial processing of validated input"
+    agent: claude-sonnet
+    timeout: 60s
+    input:
+      data: ${{ steps.validate-input.output.validated_data }}
+    output:
+      processed_data: object
+      metrics: object
+    depends_on: validate-input
+    error_handling:
+      retry_attempts: 2
+      backoff: exponential
+      on_failure: [log, notify]
+
+  # Step 3: Analysis with Opus
+  - id: analyze
+    name: "Analyze Results"
+    description: "Deep analysis of processing results"
+    agent: claude-opus
+    timeout: 120s
+    input:
+      processed_data: ${{ steps.process-step-1.output.processed_data }}
+      metrics: ${{ steps.process-step-1.output.metrics }}
+    output:
+      analysis: object
+      insights: array
+      recommendations: array
+    depends_on: process-step-1
+    error_handling:
+      retry_attempts: 2
+      backoff: linear
+      on_failure: fallback_agent:claude-sonnet
+
+  # Step 4: Generate output
+  - id: generate-output
+    name: "Generate Output"
+    description: "Format and generate final output"
+    agent: claude-sonnet
+    timeout: 30s
+    input:
+      analysis: ${{ steps.analyze.output.analysis }}
+      insights: ${{ steps.analyze.output.insights }}
+      recommendations: ${{ steps.analyze.output.recommendations }}
+    output:
+      final_result: string
+      summary: object
+    depends_on: analyze
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  # Step 5: Notify and close
+  - id: notify
+    name: "Send Notification"
+    description: "Notify team of completion"
+    agent: notification-bot
+    timeout: 10s
+    input:
+      result: ${{ steps.generate-output.output.final_result }}
+      status: success
+      channel: slack
+    depends_on: generate-output
+    error_handling:
+      on_failure: log_only
+
+# Global error handling
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+  on_critical_failure: escalate_to_human
+  notification:
+    channels: [slack, email]
+    on_failure: always
+
+# Monitoring and observability
+observability:
+  log_level: info
+  metrics:
+    - workflow_duration
+    - step_duration
+    - agent_utilization
+    - error_rate
+  trace: enabled
+
+# Resource constraints
+resources:
+  timeout_total: 600s
+  max_concurrent_steps: 1
+
+# Success criteria
+success_criteria:
+  - all_steps_completed
+  - final_result_generated
+  - metrics_collected

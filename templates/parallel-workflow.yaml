@@ -1,0 +1,154 @@
+---
+# Parallel Workflow Template
+# Use this template for workflows where multiple independent tasks run concurrently.
+# Results are aggregated at the end.
+
+version: "1.0"
+name: "parallel-workflow-template"
+description: "Template for parallel, concurrent execution workflows"
+
+inputs:
+  task_data:
+    type: object
+    description: "Shared data for all parallel tasks"
+    required: true
+  num_workers:
+    type: integer
+    description: "Number of parallel workers (default: 4)"
+    required: false
+    default: 4
+
+outputs:
+  aggregated_result:
+    type: object
+    description: "Combined results from all parallel tasks"
+  execution_report:
+    type: object
+    description: "Report of all parallel executions"
+
+triggers:
+  - type: manual
+  - type: webhook
+    path: "/workflows/parallel"
+  - type: schedule
+    cron: "0 */6 * * *"  # Every 6 hours
+
+steps:
+  # Initial setup
+  - id: prepare-work
+    name: "Prepare Work Items"
+    description: "Prepare data for parallel processing"
+    agent: claude-sonnet
+    timeout: 30s
+    input:
+      task_data: ${{ inputs.task_data }}
+      num_workers: ${{ inputs.num_workers }}
+    output:
+      work_items: array
+      item_count: integer
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  # Parallel processing block
+  - id: parallel-process
+    name: "Parallel Processing"
+    description: "Process work items in parallel"
+    type: parallel
+    worker_count: ${{ inputs.num_workers }}
+    timeout: 300s
+    depends_on: prepare-work
+    
+    worker_steps:
+      - id: process-item
+        agent: claude-sonnet
+        timeout: 60s
+        input:
+          work_item: ${{ parallel.item }}
+          index: ${{ parallel.index }}
+        output:
+          result: object
+          metrics: object
+          success: boolean
+        error_handling:
+          retry_attempts: 2
+          on_failure: continue
+
+  # Aggregation
+  - id: aggregate-results
+    name: "Aggregate Results"
+    description: "Combine results from all parallel tasks"
+    agent: claude-opus
+    timeout: 60s
+    depends_on: parallel-process
+    input:
+      all_results: ${{ steps.parallel-process.output }}
+      item_count: ${{ steps.prepare-work.output.item_count }}
+    output:
+      aggregated_result: object
+      success_count: integer
+      failure_count: integer
+      insights: array
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  # Quality check
+  - id: quality-check
+    name: "Quality Assurance"
+    description: "Verify quality of aggregated results"
+    agent: claude-sonnet
+    timeout: 30s
+    depends_on: aggregate-results
+    input:
+      aggregated_result: ${{ steps.aggregate-results.output.aggregated_result }}
+      success_count: ${{ steps.aggregate-results.output.success_count }}
+    output:
+      quality_score: number
+      issues: array
+      passed: boolean
+    error_handling:
+      on_failure: log_only
+
+  # Report generation
+  - id: generate-report
+    name: "Generate Execution Report"
+    description: "Create detailed execution report"
+    agent: claude-sonnet
+    timeout: 30s
+    depends_on: [aggregate-results, quality-check]
+    input:
+      aggregated_result: ${{ steps.aggregate-results.output.aggregated_result }}
+      quality_score: ${{ steps.quality-check.output.quality_score }}
+      execution_time: ${{ workflow.elapsed_time }}
+    output:
+      report: string
+      summary: object
+    error_handling:
+      on_failure: fallback_agent:notification-bot
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+  parallel_task_failure_handling: continue
+  notification:
+    on_failure: [slack]
+
+observability:
+  log_level: info
+  metrics:
+    - workflow_duration
+    - parallel_step_count
+    - success_rate
+    - worker_utilization
+  trace: enabled
+
+resources:
+  timeout_total: 600s
+  max_concurrent_steps: ${{ inputs.num_workers }}
+  max_parallel_workers: 16
+
+success_criteria:
+  - aggregation_completed
+  - quality_check_passed
+  - success_count > 0

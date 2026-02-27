@@ -1,0 +1,265 @@
+---
+name: kb-generation
+description: Auto-generate and update knowledge base from sources
+version: "1.0"
+
+inputs:
+  source_type:
+    type: enum
+    enum: [docs, code, issues, all]
+    required: true
+  repo:
+    type: string
+    required: true
+  kb_path:
+    type: string
+    required: false
+    default: "kb/"
+  auto_publish:
+    type: boolean
+    required: false
+    default: false
+
+outputs:
+  kb_articles:
+    type: array
+  article_count:
+    type: integer
+  coverage_report:
+    type: string
+  publish_status:
+    type: enum
+    enum: [draft, staged, published]
+
+triggers:
+  - type: github-webhook
+    event: push
+    branch_filter: "main"
+    path_filter: "docs/**"
+  - type: manual
+  - type: schedule
+    cron: "0 0 * * 0"
+    description: "Weekly KB generation"
+
+steps:
+  - id: scan-sources
+    name: "Scan Sources"
+    agent: code-analyzer
+    timeout: 300s
+    input:
+      repo: ${{ inputs.repo }}
+      source_type: ${{ inputs.source_type }}
+    output:
+      files_found: integer
+      files_list: array
+      total_content_size: number
+    error_handling:
+      retry_attempts: 2
+      on_failure: exit
+
+  - id: extract-content
+    name: "Extract Content"
+    agent: code-analyzer
+    timeout: 300s
+    depends_on: scan-sources
+    input:
+      files_list: ${{ steps.scan-sources.output.files_list }}
+      source_type: ${{ inputs.source_type }}
+    output:
+      extracted_content: object
+      content_chunks: array
+      metadata: object
+    error_handling:
+      retry_attempts: 1
+      on_failure: log
+
+  - id: identify-topics
+    name: "Identify Topics"
+    agent: claude-opus
+    timeout: 180s
+    depends_on: extract-content
+    input:
+      content: ${{ steps.extract-content.output.extracted_content }}
+      source_type: ${{ inputs.source_type }}
+    output:
+      topics_identified: array
+      topic_hierarchy: object
+      topic_count: integer
+    error_handling:
+      on_failure: log
+
+  - id: parallel-article-generation
+    name: "Generate Articles Parallel"
+    type: parallel
+    worker_count: 4
+    timeout: 600s
+    depends_on: [identify-topics, extract-content]
+    
+    worker_steps:
+      - id: generate-article
+        agent: claude-opus
+        timeout: 120s
+        input:
+          topic: ${{ parallel.topic }}
+          related_content: ${{ parallel.content }}
+          kb_style: structured
+        output:
+          article: object
+          article_title: string
+          article_body: string
+          keywords: array
+        error_handling:
+          retry_attempts: 1
+          on_failure: continue
+
+  - id: add-examples
+    name: "Add Code Examples"
+    agent: code-analyzer
+    timeout: 180s
+    depends_on: parallel-article-generation
+    input:
+      articles: ${{ steps.parallel-article-generation.output }}
+      repo: ${{ inputs.repo }}
+    output:
+      articles_with_examples: array
+      example_count: integer
+    error_handling:
+      on_failure: log
+
+  - id: cross-reference
+    name: "Add Cross-References"
+    agent: claude-sonnet
+    timeout: 120s
+    depends_on: add-examples
+    input:
+      articles: ${{ steps.add-examples.output.articles_with_examples }}
+      topic_hierarchy: ${{ steps.identify-topics.output.topic_hierarchy }}
+    output:
+      linked_articles: array
+      cross_ref_count: integer
+    error_handling:
+      on_failure: log
+
+  - id: validate-links
+    name: "Validate Links"
+    agent: code-analyzer
+    timeout: 120s
+    depends_on: cross-reference
+    input:
+      articles: ${{ steps.cross-reference.output.linked_articles }}
+    output:
+      validation_complete: boolean
+      broken_links: array
+      link_count: integer
+    error_handling:
+      on_failure: log
+
+  - id: fix-broken-links
+    name: "Fix Broken Links"
+    agent: claude-sonnet
+    timeout: 60s
+    depends_on: validate-links
+    condition: ${{ steps.validate-links.output.broken_links.length > 0 }}
+    input:
+      broken_links: ${{ steps.validate-links.output.broken_links }}
+      articles: ${{ steps.cross-reference.output.linked_articles }}
+    output:
+      fixed_articles: array
+      fixes_applied: integer
+    error_handling:
+      on_failure: log
+
+  - id: stage-kb
+    name: "Stage KB"
+    agent: kb-manager
+    timeout: 120s
+    depends_on: [validate-links, fix-broken-links]
+    input:
+      articles: ${{ steps.fix-broken-links.output.fixed_articles if steps.fix-broken-links.executed else steps.cross-reference.output.linked_articles }}
+      kb_path: ${{ inputs.kb_path }}
+    output:
+      staged: boolean
+      article_count: integer
+      staging_url: string
+    error_handling:
+      retry_attempts: 2
+      on_failure: exit
+
+  - id: preview-review
+    name: "Preview & Review"
+    agent: orchestrator
+    timeout: 300s
+    depends_on: stage-kb
+    condition: ${{ inputs.auto_publish == false }}
+    input:
+      staging_url: ${{ steps.stage-kb.output.staging_url }}
+      article_count: ${{ steps.stage-kb.output.article_count }}
+    output:
+      review_complete: boolean
+      approved: boolean
+      feedback: string
+    error_handling:
+      on_failure: log
+
+  - id: publish-kb
+    name: "Publish KB"
+    agent: kb-manager
+    timeout: 120s
+    depends_on: [stage-kb, preview-review]
+    condition: ${{ steps.preview-review.output.approved == true or inputs.auto_publish == true }}
+    input:
+      staging_url: ${{ steps.stage-kb.output.staging_url }}
+      kb_path: ${{ inputs.kb_path }}
+    output:
+      published: boolean
+      live_kb_url: string
+      publication_time: number
+    error_handling:
+      retry_attempts: 2
+      on_failure: log
+
+  - id: generate-coverage
+    name: "Generate Coverage Report"
+    agent: claude-sonnet
+    timeout: 60s
+    depends_on: stage-kb
+    input:
+      articles: ${{ steps.stage-kb.output.article_count }}
+      topics: ${{ steps.identify-topics.output.topic_count }}
+    output:
+      coverage_report: string
+      coverage_percentage: number
+    error_handling:
+      on_failure: log
+
+  - id: notify-team
+    name: "Notify Team"
+    agent: notification-bot
+    timeout: 10s
+    depends_on: [publish-kb, stage-kb]
+    input:
+      kb_url: ${{ steps.publish-kb.output.live_kb_url if steps.publish-kb.executed else steps.stage-kb.output.staging_url }}
+      article_count: ${{ steps.stage-kb.output.article_count }}
+      status: ${{ if steps.publish-kb.executed then 'published' else 'staged' }}
+    error_handling:
+      on_failure: log_only
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+
+observability:
+  log_level: info
+  metrics: [generation_time, article_count, coverage, publish_success_rate]
+
+resources:
+  timeout_total: 1200s
+  max_concurrent_workers: 4
+
+success_criteria:
+  - sources_scanned
+  - articles_generated
+  - examples_added
+  - cross_references_complete
+  - kb_staged_or_published
+  - team_notified

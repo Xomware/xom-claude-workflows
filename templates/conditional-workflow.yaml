@@ -1,0 +1,187 @@
+---
+# Conditional Workflow Template
+# Use this template for workflows with branching logic, decisions, and error recovery paths.
+
+version: "1.0"
+name: "conditional-workflow-template"
+description: "Template for conditional branching and decision-based workflows"
+
+inputs:
+  request_data:
+    type: object
+    description: "Input data for conditional processing"
+    required: true
+  auto_fallback:
+    type: boolean
+    description: "Automatically fallback if primary path fails"
+    required: false
+    default: true
+
+outputs:
+  result:
+    type: object
+    description: "Final result based on conditional execution"
+  execution_path:
+    type: string
+    description: "Which execution path was taken"
+
+triggers:
+  - type: webhook
+    path: "/workflows/conditional"
+  - type: manual
+
+steps:
+  # Step 1: Evaluate conditions
+  - id: evaluate-conditions
+    name: "Evaluate Conditions"
+    description: "Analyze input and determine execution path"
+    agent: claude-sonnet
+    timeout: 30s
+    input:
+      request_data: ${{ inputs.request_data }}
+    output:
+      condition_result: string  # primary, secondary, error_recovery
+      severity: enum  # critical, high, medium, low
+      confidence: number  # 0-1
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  # Conditional Branch: Primary Path
+  - id: primary-path
+    name: "Execute Primary Path"
+    description: "Execute primary business logic"
+    agent: claude-opus
+    timeout: 120s
+    depends_on: evaluate-conditions
+    condition: ${{ steps.evaluate-conditions.output.condition_result == 'primary' }}
+    input:
+      request_data: ${{ inputs.request_data }}
+    output:
+      result: object
+      success: boolean
+    error_handling:
+      retry_attempts: 2
+      backoff: exponential
+      on_failure: skip
+
+  # Conditional Branch: Secondary Path
+  - id: secondary-path
+    name: "Execute Secondary Path"
+    description: "Execute alternative logic"
+    agent: claude-sonnet
+    timeout: 90s
+    depends_on: evaluate-conditions
+    condition: ${{ steps.evaluate-conditions.output.condition_result == 'secondary' }}
+    input:
+      request_data: ${{ inputs.request_data }}
+    output:
+      result: object
+      success: boolean
+    error_handling:
+      retry_attempts: 1
+      on_failure: skip
+
+  # Conditional Branch: Error Recovery Path
+  - id: error-recovery
+    name: "Execute Error Recovery"
+    description: "Recovery path for errors"
+    agent: claude-sonnet
+    timeout: 60s
+    depends_on: evaluate-conditions
+    condition: ${{ steps.evaluate-conditions.output.condition_result == 'error_recovery' }}
+    input:
+      request_data: ${{ inputs.request_data }}
+      severity: ${{ steps.evaluate-conditions.output.severity }}
+    output:
+      mitigation: string
+      fallback_result: object
+    error_handling:
+      retry_attempts: 1
+      on_failure: escalate
+
+  # Select result based on which path executed
+  - id: select-result
+    name: "Select Result"
+    description: "Determine final result based on executed path"
+    agent: claude-sonnet
+    timeout: 30s
+    depends_on: [primary-path, secondary-path, error-recovery]
+    input:
+      primary_result: ${{ steps.primary-path.output.result if steps.primary-path.executed else null }}
+      secondary_result: ${{ steps.secondary-path.output.result if steps.secondary-path.executed else null }}
+      recovery_result: ${{ steps.error-recovery.output.fallback_result if steps.error-recovery.executed else null }}
+      execution_path: ${{ steps.evaluate-conditions.output.condition_result }}
+    output:
+      final_result: object
+      source_path: string
+    error_handling:
+      on_failure: exit
+
+  # Conditional post-processing based on result quality
+  - id: post-process
+    name: "Post-Process Result"
+    description: "Apply post-processing if quality threshold met"
+    agent: claude-sonnet
+    timeout: 30s
+    depends_on: select-result
+    condition: ${{ steps.select-result.output.final_result != null }}
+    input:
+      result: ${{ steps.select-result.output.final_result }}
+    output:
+      processed_result: object
+    error_handling:
+      on_failure: log_only
+
+  # Conditional escalation for critical results
+  - id: escalate-if-critical
+    name: "Escalate If Critical"
+    description: "Escalate to human review if critical"
+    agent: notification-bot
+    timeout: 10s
+    depends_on: select-result
+    condition: ${{ steps.evaluate-conditions.output.severity == 'critical' }}
+    input:
+      result: ${{ steps.select-result.output.final_result }}
+      severity: ${{ steps.evaluate-conditions.output.severity }}
+    error_handling:
+      on_failure: log_only
+
+  # Final notification
+  - id: notify-completion
+    name: "Notify Completion"
+    description: "Send completion notification"
+    agent: notification-bot
+    timeout: 10s
+    depends_on: select-result
+    input:
+      result: ${{ steps.select-result.output.final_result }}
+      execution_path: ${{ steps.select-result.output.source_path }}
+      status: success
+    error_handling:
+      on_failure: log_only
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+  conditional_failure_strategy: fallback_to_next_condition
+  notification:
+    on_failure: [slack]
+
+observability:
+  log_level: info
+  metrics:
+    - execution_path
+    - condition_evaluation_time
+    - path_success_rate
+    - escalation_rate
+  trace: enabled
+
+resources:
+  timeout_total: 600s
+  max_concurrent_steps: 3
+
+success_criteria:
+  - condition_evaluated
+  - at_least_one_path_executed
+  - final_result_generated

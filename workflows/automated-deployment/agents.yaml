@@ -1,0 +1,8 @@
+---
+agents:
+  claude-opus:
+    model: 'claude-opus-4'
+    role: 'Architect'
+  claude-sonnet:
+    model: 'claude-sonnet-4'
+    role: 'Engineer'

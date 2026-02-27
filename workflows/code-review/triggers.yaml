@@ -1,0 +1,28 @@
+---
+triggers:
+  github_pr_opened:
+    type: github-webhook
+    event: pull_request
+    actions: [opened, synchronize]
+    description: "Trigger on PR open or update"
+
+  github_pr_labeled:
+    type: github-webhook
+    event: pull_request
+    actions: [labeled]
+    filter: 'contains(labels, "review-needed")'
+    description: "Trigger when review-needed label added"
+
+  manual_review:
+    type: manual
+    description: "Manual trigger via CLI"
+
+  scheduled_review:
+    type: schedule
+    cron: "0 * * * *"
+    description: "Hourly check for pending reviews"
+
+  slack_command:
+    type: slack-webhook
+    command: /review-pr
+    description: "Slack command to trigger review"

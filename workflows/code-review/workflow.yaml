@@ -1,0 +1,215 @@
+---
+name: code-review
+description: Automated code review with architectural and security analysis
+version: "1.0"
+
+inputs:
+  repo:
+    type: string
+    required: true
+    description: "GitHub repository (owner/name)"
+  pr_number:
+    type: integer
+    required: true
+    description: "Pull request number"
+  review_type:
+    type: enum
+    enum: [full, security, performance]
+    required: false
+    default: full
+  auto_approve:
+    type: boolean
+    required: false
+    default: false
+
+outputs:
+  review_result:
+    type: object
+    description: "Review findings (score, issues, suggestions)"
+  approval_status:
+    type: enum
+    enum: [approved, requested_changes, commented]
+  pr_comment_id:
+    type: string
+  auto_approved:
+    type: boolean
+
+triggers:
+  - type: github-webhook
+    event: pull_request
+    actions: [opened, synchronize]
+  - type: github-webhook
+    event: pull_request
+    actions: [opened]
+    filter: 'contains(labels, "review-needed")'
+  - type: manual
+  - type: schedule
+    cron: "0 * * * *"
+    description: "Hourly check for pending PRs"
+
+steps:
+  - id: fetch-pr
+    name: "Fetch PR Details"
+    agent: devops-bot
+    timeout: 30s
+    input:
+      repo: ${{ inputs.repo }}
+      pr_number: ${{ inputs.pr_number }}
+    output:
+      pr_details: object
+      files_changed: array
+      diff: string
+    error_handling:
+      retry_attempts: 2
+      on_failure: exit
+
+  - id: analyze-code
+    name: "Analyze Code"
+    agent: claude-opus
+    timeout: 180s
+    depends_on: fetch-pr
+    input:
+      diff: ${{ steps.fetch-pr.output.diff }}
+      files: ${{ steps.fetch-pr.output.files_changed }}
+      review_type: ${{ inputs.review_type }}
+    output:
+      architecture_review: object
+      code_quality: object
+      patterns: array
+      quality_score: number
+    error_handling:
+      retry_attempts: 2
+      backoff: exponential
+      on_failure: log
+
+  - id: security-review
+    name: "Security Analysis"
+    agent: claude-sonnet
+    timeout: 120s
+    depends_on: fetch-pr
+    condition: ${{ inputs.review_type == 'full' or inputs.review_type == 'security' }}
+    input:
+      diff: ${{ steps.fetch-pr.output.diff }}
+      files: ${{ steps.fetch-pr.output.files_changed }}
+    output:
+      vulnerabilities: array
+      secrets_found: array
+      permissions_issues: array
+      risk_level: string
+    error_handling:
+      retry_attempts: 1
+      on_failure: continue
+
+  - id: performance-check
+    name: "Performance Review"
+    agent: claude-sonnet
+    timeout: 90s
+    depends_on: fetch-pr
+    condition: ${{ inputs.review_type == 'full' or inputs.review_type == 'performance' }}
+    input:
+      diff: ${{ steps.fetch-pr.output.diff }}
+      files: ${{ steps.fetch-pr.output.files_changed }}
+    output:
+      performance_issues: array
+      optimizations: array
+      complexity_analysis: object
+    error_handling:
+      on_failure: continue
+
+  - id: aggregate-findings
+    name: "Aggregate Findings"
+    agent: claude-sonnet
+    timeout: 30s
+    depends_on: [analyze-code, security-review, performance-check]
+    input:
+      code_analysis: ${{ steps.analyze-code.output }}
+      security: ${{ steps.security-review.output if steps.security-review.executed else null }}
+      performance: ${{ steps.performance-check.output if steps.performance-check.executed else null }}
+    output:
+      all_findings: array
+      blocking_issues: array
+      suggestions: array
+      overall_score: number
+    error_handling:
+      on_failure: exit
+
+  - id: post-comment
+    name: "Post Review Comment"
+    agent: devops-bot
+    timeout: 30s
+    depends_on: aggregate-findings
+    input:
+      repo: ${{ inputs.repo }}
+      pr_number: ${{ inputs.pr_number }}
+      findings: ${{ steps.aggregate-findings.output.all_findings }}
+      score: ${{ steps.aggregate-findings.output.overall_score }}
+    output:
+      comment_id: string
+      posted: boolean
+    error_handling:
+      retry_attempts: 2
+      on_failure: log
+
+  - id: determine-approval
+    name: "Determine Approval"
+    agent: claude-sonnet
+    timeout: 30s
+    depends_on: aggregate-findings
+    input:
+      blocking_issues: ${{ steps.aggregate-findings.output.blocking_issues }}
+      score: ${{ steps.aggregate-findings.output.overall_score }}
+      auto_approve_enabled: ${{ inputs.auto_approve }}
+    output:
+      approval_status: enum
+      reason: string
+      should_auto_approve: boolean
+    error_handling:
+      on_failure: log
+
+  - id: apply-approval
+    name: "Apply Approval/Review"
+    agent: devops-bot
+    timeout: 30s
+    depends_on: [determine-approval, post-comment]
+    condition: ${{ steps.determine-approval.output.should_auto_approve == true }}
+    input:
+      repo: ${{ inputs.repo }}
+      pr_number: ${{ inputs.pr_number }}
+      status: approve
+    error_handling:
+      on_failure: log
+
+  - id: notify-team
+    name: "Notify Team"
+    agent: notification-bot
+    timeout: 10s
+    depends_on: [aggregate-findings, post-comment]
+    input:
+      repo: ${{ inputs.repo }}
+      pr_number: ${{ inputs.pr_number }}
+      score: ${{ steps.aggregate-findings.output.overall_score }}
+      status: ${{ steps.determine-approval.output.approval_status }}
+      blocking_issues: ${{ steps.aggregate-findings.output.blocking_issues }}
+      channel: slack
+    error_handling:
+      on_failure: log_only
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+  on_critical_failure: escalate_to_human
+
+observability:
+  log_level: info
+  metrics: [review_duration, quality_score, approval_rate, false_positive_rate]
+  trace: enabled
+
+resources:
+  timeout_total: 600s
+  max_concurrent_steps: 3
+
+success_criteria:
+  - pr_fetched_successfully
+  - code_analysis_completed
+  - review_comment_posted
+  - team_notified

@@ -1,0 +1,229 @@
+---
+name: multi-agent-coordination
+description: Coordinate complex tasks across specialized agents
+version: "1.0"
+
+inputs:
+  task:
+    type: string
+    required: true
+  coordination_mode:
+    type: enum
+    enum: [sequential, parallel, supervisor]
+    required: false
+    default: supervisor
+  timeout:
+    type: integer
+    required: false
+    default: 600
+
+outputs:
+  final_result:
+    type: string
+  agent_outputs:
+    type: object
+  execution_time:
+    type: number
+  quality_score:
+    type: float
+
+triggers:
+  - type: manual
+  - type: slack-webhook
+    command: /orchestrate
+  - type: webhook
+    path: "/orchestrate"
+
+steps:
+  - id: parse-task
+    name: "Parse Task"
+    agent: orchestrator
+    timeout: 60s
+    input:
+      task: ${{ inputs.task }}
+      mode: ${{ inputs.coordination_mode }}
+    output:
+      task_requirements: object
+      complexity_level: string
+      estimated_agents: integer
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  - id: agent-assignment
+    name: "Agent Assignment"
+    agent: orchestrator
+    timeout: 60s
+    depends_on: parse-task
+    input:
+      task_requirements: ${{ steps.parse-task.output.task_requirements }}
+      coordination_mode: ${{ inputs.coordination_mode }}
+    output:
+      agent_assignments: object
+      task_decomposition: object
+    error_handling:
+      on_failure: exit
+
+  - id: opus-architect
+    name: "Opus Architecture Design"
+    agent: claude-opus
+    timeout: 180s
+    depends_on: agent-assignment
+    condition: ${{ inputs.coordination_mode == 'supervisor' or inputs.coordination_mode == 'sequential' }}
+    input:
+      task_requirements: ${{ steps.parse-task.output.task_requirements }}
+    output:
+      architecture: object
+      design_rationale: string
+    error_handling:
+      retry_attempts: 2
+      on_failure: [log, fallback_agent:claude-sonnet]
+
+  - id: sonnet-implementation
+    name: "Sonnet Implementation"
+    agent: claude-sonnet
+    timeout: 180s
+    depends_on: agent-assignment
+    condition: ${{ inputs.coordination_mode == 'supervisor' or inputs.coordination_mode == 'sequential' }}
+    input:
+      task_requirements: ${{ steps.parse-task.output.task_requirements }}
+      architecture: ${{ steps.opus-architect.output.architecture if steps.opus-architect.executed else null }}
+    output:
+      implementation: object
+      code_output: string
+    error_handling:
+      retry_attempts: 2
+      on_failure: [log, escalate]
+
+  - id: sonnet-review
+    name: "Sonnet Review"
+    agent: claude-sonnet
+    timeout: 120s
+    depends_on: [sonnet-implementation, opus-architect]
+    condition: ${{ inputs.coordination_mode == 'supervisor' }}
+    input:
+      architecture: ${{ steps.opus-architect.output.architecture }}
+      implementation: ${{ steps.sonnet-implementation.output.implementation }}
+    output:
+      review_notes: array
+      quality_score: number
+      issues: array
+    error_handling:
+      on_failure: log
+
+  - id: parallel-workers
+    name: "Parallel Agent Work"
+    type: parallel
+    worker_count: 3
+    timeout: 300s
+    depends_on: agent-assignment
+    condition: ${{ inputs.coordination_mode == 'parallel' }}
+    
+    worker_steps:
+      - id: worker-task
+        agent: ${{ parallel.agent }}
+        timeout: 120s
+        input:
+          subtask: ${{ parallel.subtask }}
+          task_context: ${{ inputs.task }}
+        output:
+          subtask_result: object
+          worker_completion_time: number
+        error_handling:
+          retry_attempts: 1
+          on_failure: continue
+
+  - id: detect-conflicts
+    name: "Detect Conflicts"
+    agent: orchestrator
+    timeout: 60s
+    depends_on: [sonnet-review, parallel-workers]
+    input:
+      opus_output: ${{ steps.opus-architect.output if steps.opus-architect.executed else null }}
+      sonnet_output: ${{ steps.sonnet-implementation.output if steps.sonnet-implementation.executed else null }}
+      parallel_outputs: ${{ steps.parallel-workers.output if steps.parallel-workers.executed else null }}
+      review_issues: ${{ steps.sonnet-review.output.issues if steps.sonnet-review.executed else null }}
+    output:
+      conflicts_detected: boolean
+      conflict_list: array
+    error_handling:
+      on_failure: log
+
+  - id: resolve-conflicts
+    name: "Resolve Conflicts"
+    agent: claude-opus
+    timeout: 120s
+    depends_on: detect-conflicts
+    condition: ${{ steps.detect-conflicts.output.conflicts_detected == true }}
+    input:
+      conflicts: ${{ steps.detect-conflicts.output.conflict_list }}
+      task_context: ${{ inputs.task }}
+    output:
+      resolution: object
+      decisions: array
+    error_handling:
+      retry_attempts: 1
+      on_failure: escalate
+
+  - id: quality-assurance
+    name: "Quality Assurance"
+    agent: claude-sonnet
+    timeout: 120s
+    depends_on: [sonnet-implementation, resolve-conflicts]
+    input:
+      implementation: ${{ steps.sonnet-implementation.output.implementation if steps.sonnet-implementation.executed else null }}
+      resolution: ${{ steps.resolve-conflicts.output.resolution if steps.resolve-conflicts.executed else null }}
+    output:
+      qa_complete: boolean
+      final_quality_score: number
+      ready_to_deliver: boolean
+    error_handling:
+      on_failure: log
+
+  - id: synthesize-result
+    name: "Synthesize Result"
+    agent: orchestrator
+    timeout: 60s
+    depends_on: [quality-assurance, sonnet-implementation]
+    input:
+      opus_result: ${{ steps.opus-architect.output if steps.opus-architect.executed else null }}
+      sonnet_result: ${{ steps.sonnet-implementation.output if steps.sonnet-implementation.executed else null }}
+      parallel_results: ${{ steps.parallel-workers.output if steps.parallel-workers.executed else null }}
+      qa_score: ${{ steps.quality-assurance.output.final_quality_score }}
+    output:
+      final_result: string
+      combined_output: object
+    error_handling:
+      on_failure: exit
+
+  - id: notify-completion
+    name: "Notify Completion"
+    agent: notification-bot
+    timeout: 10s
+    depends_on: synthesize-result
+    input:
+      result: ${{ steps.synthesize-result.output.final_result }}
+      quality_score: ${{ steps.quality-assurance.output.final_quality_score }}
+      status: complete
+    error_handling:
+      on_failure: log_only
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+  conflict_escalation: human_review
+
+observability:
+  log_level: info
+  metrics: [coordination_strategy, agent_execution_time, conflict_resolution_time, quality_score]
+
+resources:
+  timeout_total: ${{ inputs.timeout }}
+  max_concurrent_agents: 4
+
+success_criteria:
+  - task_parsed
+  - agents_assigned
+  - implementation_completed
+  - quality_check_passed
+  - result_synthesized

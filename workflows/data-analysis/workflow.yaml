@@ -1,0 +1,212 @@
+---
+name: data-analysis
+description: Data ingestion, analysis, and insight generation
+version: "1.0"
+
+inputs:
+  data_source:
+    type: string
+    required: true
+  analysis_type:
+    type: enum
+    enum: [exploratory, statistical, predictive]
+    required: true
+  output_format:
+    type: enum
+    enum: [report, dashboard, csv]
+    required: false
+    default: report
+  sample_size:
+    type: integer
+    required: false
+
+outputs:
+  analysis_report:
+    type: string
+  visualizations:
+    type: array
+  statistics:
+    type: object
+  insights:
+    type: array
+
+triggers:
+  - type: manual
+  - type: schedule
+    cron: "0 6 * * *"
+    description: "Daily 6 AM analysis"
+  - type: webhook
+    path: "/data/analyze"
+
+steps:
+  - id: fetch-data
+    name: "Fetch Data"
+    agent: data-processor
+    timeout: 300s
+    input:
+      source: ${{ inputs.data_source }}
+      sample_size: ${{ inputs.sample_size }}
+    output:
+      data_loaded: boolean
+      row_count: integer
+      columns: array
+      data_stats: object
+    error_handling:
+      retry_attempts: 2
+      on_failure: exit
+
+  - id: validate-data
+    name: "Validate Data"
+    agent: data-processor
+    timeout: 120s
+    depends_on: fetch-data
+    input:
+      data_stats: ${{ steps.fetch-data.output.data_stats }}
+      columns: ${{ steps.fetch-data.output.columns }}
+    output:
+      validation_passed: boolean
+      missing_values: object
+      data_quality_score: number
+    error_handling:
+      on_failure: log
+
+  - id: clean-data
+    name: "Clean Data"
+    agent: data-processor
+    timeout: 300s
+    depends_on: validate-data
+    input:
+      missing_values: ${{ steps.validate-data.output.missing_values }}
+      columns: ${{ steps.fetch-data.output.columns }}
+    output:
+      cleaning_complete: boolean
+      rows_removed: integer
+      values_imputed: integer
+    error_handling:
+      retry_attempts: 1
+      on_failure: log
+
+  - id: exploratory-analysis
+    name: "Exploratory Analysis"
+    agent: claude-sonnet
+    timeout: 120s
+    depends_on: clean-data
+    condition: ${{ inputs.analysis_type == 'exploratory' or inputs.analysis_type == 'statistical' }}
+    input:
+      row_count: ${{ steps.fetch-data.output.row_count }}
+      columns: ${{ steps.fetch-data.output.columns }}
+    output:
+      distributions: object
+      correlations: object
+      patterns: array
+    error_handling:
+      on_failure: log
+
+  - id: statistical-analysis
+    name: "Statistical Analysis"
+    agent: claude-sonnet
+    timeout: 180s
+    depends_on: clean-data
+    condition: ${{ inputs.analysis_type == 'statistical' }}
+    input:
+      row_count: ${{ steps.fetch-data.output.row_count }}
+    output:
+      hypotheses_tested: array
+      significant_results: array
+      p_values: object
+    error_handling:
+      on_failure: log
+
+  - id: generate-visualizations
+    name: "Generate Visualizations"
+    agent: visualization-bot
+    timeout: 180s
+    depends_on: [exploratory-analysis, statistical-analysis]
+    input:
+      analysis_type: ${{ inputs.analysis_type }}
+      distributions: ${{ steps.exploratory-analysis.output.distributions if steps.exploratory-analysis.executed else null }}
+      correlations: ${{ steps.exploratory-analysis.output.correlations if steps.exploratory-analysis.executed else null }}
+    output:
+      charts: array
+      chart_files: object
+      visualization_count: integer
+    error_handling:
+      on_failure: log
+
+  - id: synthesize-insights
+    name: "Synthesize Insights"
+    agent: claude-opus
+    timeout: 180s
+    depends_on: [exploratory-analysis, statistical-analysis, generate-visualizations]
+    input:
+      distributions: ${{ steps.exploratory-analysis.output.distributions if steps.exploratory-analysis.executed else null }}
+      patterns: ${{ steps.exploratory-analysis.output.patterns if steps.exploratory-analysis.executed else null }}
+      significant_results: ${{ steps.statistical-analysis.output.significant_results if steps.statistical-analysis.executed else null }}
+    output:
+      insights: array
+      key_findings: array
+      recommendations: array
+    error_handling:
+      on_failure: exit
+
+  - id: generate-report
+    name: "Generate Report"
+    agent: claude-sonnet
+    timeout: 120s
+    depends_on: [synthesize-insights, generate-visualizations]
+    input:
+      insights: ${{ steps.synthesize-insights.output.insights }}
+      findings: ${{ steps.synthesize-insights.output.key_findings }}
+      format: ${{ inputs.output_format }}
+    output:
+      report_content: string
+      formatted_report: object
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  - id: save-results
+    name: "Save Results"
+    agent: data-processor
+    timeout: 120s
+    depends_on: [generate-report, generate-visualizations]
+    input:
+      report: ${{ steps.generate-report.output.formatted_report }}
+      charts: ${{ steps.generate-visualizations.output.chart_files }}
+      insights: ${{ steps.synthesize-insights.output.insights }}
+    output:
+      storage_complete: boolean
+      result_url: string
+    error_handling:
+      retry_attempts: 2
+      on_failure: log
+
+  - id: notify-team
+    name: "Notify Team"
+    agent: notification-bot
+    timeout: 10s
+    depends_on: [save-results, synthesize-insights]
+    input:
+      result_url: ${{ steps.save-results.output.result_url }}
+      insight_count: ${{ steps.synthesize-insights.output.insights.length }}
+      analysis_type: ${{ inputs.analysis_type }}
+    error_handling:
+      on_failure: log_only
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+
+observability:
+  log_level: info
+  metrics: [analysis_duration, data_quality, insight_count]
+
+resources:
+  timeout_total: 1200s
+
+success_criteria:
+  - data_fetched
+  - data_cleaned
+  - analysis_completed
+  - insights_generated
+  - report_saved

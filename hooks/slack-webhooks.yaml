@@ -1,0 +1,169 @@
+---
+name: "Slack Webhooks & Commands"
+description: "Slack integration triggers for workflows"
+
+slash-commands:
+  review-pr:
+    command: "/review-pr"
+    description: "Manually trigger code review"
+    usage: "/review-pr [repo/owner] [pr-number]"
+    workflow: code-review
+    parameters:
+      - name: repo
+        type: string
+        required: true
+        description: "Repository (owner/name)"
+      - name: pr_number
+        type: integer
+        required: true
+        description: "PR number to review"
+    handler:
+      url: "https://api.workflow.io/slack/review-pr"
+      ack_seconds: 3
+
+  implement-feature:
+    command: "/implement-feature"
+    description: "Start feature implementation workflow"
+    usage: "/implement-feature [feature-description]"
+    workflow: feature-implementation
+    parameters:
+      - name: feature_spec
+        type: string
+        required: true
+        description: "Feature specification"
+      - name: repo
+        type: string
+        required: false
+        default: "auto-detect"
+    handler:
+      url: "https://api.workflow.io/slack/implement-feature"
+      ack_seconds: 3
+
+  research:
+    command: "/research"
+    description: "Trigger research pipeline"
+    usage: "/research [topic]"
+    workflow: research-pipeline
+    parameters:
+      - name: research_topic
+        type: string
+        required: true
+      - name: scope
+        type: enum
+        enum: [narrow, broad]
+        required: false
+        default: broad
+    handler:
+      url: "https://api.workflow.io/slack/research"
+      ack_seconds: 3
+
+  orchestrate:
+    command: "/orchestrate"
+    description: "Coordinate multi-agent task"
+    usage: "/orchestrate [task-description]"
+    workflow: multi-agent-coordination
+    parameters:
+      - name: task
+        type: string
+        required: true
+      - name: coordination_mode
+        type: enum
+        enum: [sequential, parallel, supervisor]
+        required: false
+        default: supervisor
+    handler:
+      url: "https://api.workflow.io/slack/orchestrate"
+      ack_seconds: 3
+
+  analyze-data:
+    command: "/analyze"
+    description: "Trigger data analysis"
+    usage: "/analyze [source] [type]"
+    workflow: data-analysis
+    parameters:
+      - name: data_source
+        type: string
+        required: true
+      - name: analysis_type
+        type: enum
+        enum: [exploratory, statistical, predictive]
+        required: true
+    handler:
+      url: "https://api.workflow.io/slack/analyze"
+      ack_seconds: 3
+
+event-subscriptions:
+  app_mention:
+    description: "Listen for app mentions"
+    triggers:
+      - text: "@bot review"
+        workflow: code-review
+      - text: "@bot status"
+        workflow: none
+        handler: report_status
+
+  message:
+    description: "Listen for messages in subscribed channels"
+    channels: [engineering, deployments, incidents]
+    filters:
+      - keyword: incident
+        workflow: incident-response
+        auto_trigger: false
+        notify: true
+
+interactive-components:
+  workflow-approval:
+    type: button
+    action_id: workflow-approve
+    description: "Approve workflow action"
+    workflows: [automated-deployment, feature-implementation]
+    handler:
+      url: "https://api.workflow.io/slack/approve"
+      ack_seconds: 1
+
+  workflow-reject:
+    type: button
+    action_id: workflow-reject
+    description: "Reject workflow action"
+    workflows: [automated-deployment, feature-implementation]
+    handler:
+      url: "https://api.workflow.io/slack/reject"
+      ack_seconds: 1
+
+  workflow-retry:
+    type: button
+    action_id: workflow-retry
+    description: "Retry workflow execution"
+    handler:
+      url: "https://api.workflow.io/slack/retry"
+      ack_seconds: 1
+
+notifications:
+  workflow_started:
+    channel: "#workflows"
+    message_template: "workflow_started"
+    include_details: true
+
+  workflow_completed:
+    channel: "#workflows"
+    message_template: "workflow_completed"
+    include_details: true
+    include_metrics: true
+
+  workflow_failed:
+    channel: "#alerts"
+    message_template: "workflow_failed"
+    include_error: true
+    mention_oncall: true
+
+# Configuration
+configuration:
+  signing_secret: ${{ SLACK_SIGNING_SECRET }}
+  token: ${{ SLACK_BOT_TOKEN }}
+  request_timeout: 3000ms
+  max_retries: 2
+
+security:
+  verify_requests: true
+  rate_limit: 100_per_minute
+  allowed_channels: ["engineering", "deployments", "incidents", "workflows"]

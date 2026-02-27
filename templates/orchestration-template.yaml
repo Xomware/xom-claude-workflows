@@ -1,0 +1,274 @@
+---
+# Multi-Agent Orchestration Template
+# Use this template for complex workflows requiring multiple specialized agents.
+# Includes coordination patterns, hand-offs, and conflict resolution.
+
+version: "1.0"
+name: "orchestration-template"
+description: "Template for multi-agent coordination and orchestration"
+
+inputs:
+  task:
+    type: string
+    description: "Main task description"
+    required: true
+  coordination_mode:
+    type: enum
+    enum: [sequential, parallel, supervisor]
+    description: "Agent coordination strategy"
+    required: false
+    default: supervisor
+
+outputs:
+  orchestration_result:
+    type: object
+    description: "Combined result from all agents"
+  agent_reports:
+    type: object
+    description: "Individual reports from each agent"
+
+triggers:
+  - type: manual
+  - type: webhook
+    path: "/workflows/orchestration"
+
+metadata:
+  agents:
+    - id: orchestrator
+      role: "Coordinator"
+      description: "Orchestrates agent coordination"
+    - id: architect
+      agent: claude-opus
+      role: "Architect"
+      description: "Design and architecture decisions"
+    - id: engineer
+      agent: claude-sonnet
+      role: "Engineer"
+      description: "Implementation and coding"
+    - id: reviewer
+      agent: claude-sonnet
+      role: "Reviewer"
+      description: "Quality assurance and validation"
+
+steps:
+  # Step 1: Task understanding and decomposition
+  - id: task-analysis
+    name: "Task Analysis & Decomposition"
+    description: "Break down task into subtasks for agents"
+    agent: orchestrator
+    timeout: 60s
+    input:
+      task: ${{ inputs.task }}
+      coordination_mode: ${{ inputs.coordination_mode }}
+    output:
+      subtasks: array
+      agent_assignments: object
+      execution_plan: object
+      dependencies: array
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  # Sequential Orchestration Pattern
+  - id: architect-design
+    name: "Architecture Design"
+    description: "Agent 1: Architect designs solution"
+    agent: architect
+    timeout: 180s
+    depends_on: task-analysis
+    condition: ${{ inputs.coordination_mode == 'sequential' or inputs.coordination_mode == 'supervisor' }}
+    input:
+      task: ${{ inputs.task }}
+      subtasks: ${{ steps.task-analysis.output.subtasks }}
+    output:
+      design: object
+      requirements: array
+      risks: array
+      design_rationale: string
+    error_handling:
+      retry_attempts: 2
+      backoff: exponential
+      on_failure: [log, notify]
+
+  # Parallel Orchestration: Multiple agents working independently
+  - id: parallel-agents
+    name: "Parallel Agent Execution"
+    description: "Multiple agents work on assigned subtasks in parallel"
+    type: parallel
+    worker_count: 3
+    timeout: 300s
+    depends_on: task-analysis
+    condition: ${{ inputs.coordination_mode == 'parallel' }}
+    
+    worker_steps:
+      - id: agent-work
+        agent: ${{ parallel.agent }}
+        timeout: 120s
+        input:
+          subtask: ${{ parallel.subtask }}
+          task_context: ${{ inputs.task }}
+          design: ${{ steps.architect-design.output.design if steps.architect-design.executed else null }}
+        output:
+          agent_result: object
+          quality_metrics: object
+          completion_time: number
+        error_handling:
+          retry_attempts: 1
+          on_failure: continue
+
+  # Supervisor Orchestration: Architect supervises execution
+  - id: supervised-execution
+    name: "Supervised Execution"
+    description: "Architect supervises engineer's implementation"
+    agent: engineer
+    timeout: 180s
+    depends_on: architect-design
+    condition: ${{ inputs.coordination_mode == 'supervisor' }}
+    input:
+      task: ${{ inputs.task }}
+      design: ${{ steps.architect-design.output.design }}
+      requirements: ${{ steps.architect-design.output.requirements }}
+    output:
+      implementation: object
+      execution_result: object
+    error_handling:
+      retry_attempts: 2
+      backoff: exponential
+      on_failure: escalate
+
+  # Conflict Detection & Resolution
+  - id: detect-conflicts
+    name: "Detect Conflicts"
+    description: "Identify disagreements between agents"
+    agent: orchestrator
+    timeout: 60s
+    depends_on: [parallel-agents, supervised-execution, architect-design]
+    input:
+      architect_output: ${{ steps.architect-design.output if steps.architect-design.executed else null }}
+      engineer_output: ${{ steps.supervised-execution.output if steps.supervised-execution.executed else null }}
+      parallel_results: ${{ steps.parallel-agents.output if steps.parallel-agents.executed else null }}
+    output:
+      conflicts_detected: boolean
+      conflict_list: array
+      resolution_strategy: string
+    error_handling:
+      on_failure: log_only
+
+  # Conflict Resolution
+  - id: resolve-conflicts
+    name: "Resolve Conflicts"
+    description: "Resolve disagreements between agents"
+    agent: architect
+    timeout: 120s
+    depends_on: detect-conflicts
+    condition: ${{ steps.detect-conflicts.output.conflicts_detected == true }}
+    input:
+      conflicts: ${{ steps.detect-conflicts.output.conflict_list }}
+      architect_position: ${{ steps.architect-design.output.design if steps.architect-design.executed else null }}
+      engineer_position: ${{ steps.supervised-execution.output if steps.supervised-execution.executed else null }}
+    output:
+      resolved_items: object
+      final_design: object
+      decision_rationale: string
+    error_handling:
+      retry_attempts: 1
+      on_failure: [escalate, human_review]
+
+  # Quality Assurance Review
+  - id: qa-review
+    name: "Quality Assurance Review"
+    description: "Reviewer validates solution"
+    agent: reviewer
+    timeout: 120s
+    depends_on: [supervised-execution, resolve-conflicts]
+    input:
+      implementation: ${{ steps.supervised-execution.output.implementation if steps.supervised-execution.executed else steps.resolve-conflicts.output.final_design }}
+      requirements: ${{ steps.architect-design.output.requirements if steps.architect-design.executed else null }}
+    output:
+      qa_report: object
+      quality_score: number
+      issues: array
+      passes: boolean
+    error_handling:
+      retry_attempts: 1
+      on_failure: log_only
+
+  # Final synthesis and result generation
+  - id: synthesize-result
+    name: "Synthesize Result"
+    description: "Combine all agent outputs into final result"
+    agent: orchestrator
+    timeout: 60s
+    depends_on: [qa-review, resolve-conflicts]
+    input:
+      task: ${{ inputs.task }}
+      architect_output: ${{ steps.architect-design.output if steps.architect-design.executed else null }}
+      engineer_output: ${{ steps.supervised-execution.output if steps.supervised-execution.executed else null }}
+      parallel_outputs: ${{ steps.parallel-agents.output if steps.parallel-agents.executed else null }}
+      conflicts_resolved: ${{ steps.resolve-conflicts.output if steps.resolve-conflicts.executed else null }}
+      qa_report: ${{ steps.qa-review.output }}
+    output:
+      final_result: object
+      orchestration_report: object
+      success: boolean
+    error_handling:
+      on_failure: exit
+
+  # Communication & Notification
+  - id: notify-agents
+    name: "Notify Agents & Stakeholders"
+    description: "Communicate results to all agents and team"
+    agent: notification-bot
+    timeout: 30s
+    depends_on: synthesize-result
+    input:
+      result: ${{ steps.synthesize-result.output.final_result }}
+      report: ${{ steps.synthesize-result.output.orchestration_report }}
+      success: ${{ steps.synthesize-result.output.success }}
+    error_handling:
+      on_failure: log_only
+
+# Coordination Rules
+coordination:
+  strategy: ${{ inputs.coordination_mode }}
+  hand_off_protocol: "structured messaging"
+  timeout_per_agent: 180s
+  timeout_total: 900s
+  escalation:
+    conflicts: human_review
+    failures: escalate_to_supervisor
+    timeouts: terminate_and_log
+  communication:
+    between_agents: enabled
+    logging: debug
+    tracing: enabled
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+  agent_failure_handling: escalate
+  conflict_handling: human_review
+  notification:
+    on_failure: [slack, email]
+
+observability:
+  log_level: debug
+  metrics:
+    - coordination_strategy_used
+    - agent_execution_time
+    - conflict_resolution_time
+    - qa_score
+    - total_duration
+  trace: enabled
+
+resources:
+  timeout_total: 900s
+  max_concurrent_agents: 4
+  max_retries: 3
+
+success_criteria:
+  - task_decomposition_completed
+  - all_agents_executed_or_skipped
+  - conflicts_resolved_if_detected
+  - quality_check_passed
+  - final_result_generated

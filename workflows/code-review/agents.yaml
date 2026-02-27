@@ -1,0 +1,54 @@
+---
+agents:
+  claude-opus:
+    model: "claude-opus-4"
+    role: "Architect"
+    specialization:
+      - architectural_review
+      - design_patterns
+      - complex_logic_analysis
+    capabilities:
+      - deep_code_analysis
+      - long_context_understanding
+      - complex_reasoning
+    temperature: 0.7
+
+  claude-sonnet:
+    model: "claude-sonnet-4"
+    role: "Code Quality Reviewer"
+    specialization:
+      - code_quality
+      - security_scanning
+      - performance_analysis
+      - style_consistency
+    capabilities:
+      - fast_analysis
+      - security_vulnerability_detection
+      - performance_profiling
+    temperature: 0.5
+
+  devops-bot:
+    type: "integration-bot"
+    role: "GitHub Integration"
+    capabilities:
+      - fetch_pr_details
+      - post_comments
+      - apply_reviews
+      - manage_labels
+
+  notification-bot:
+    type: "integration-bot"
+    role: "Notifications"
+    capabilities:
+      - slack_notifications
+      - email_notifications
+      - github_status_updates
+
+agent_routing:
+  fetch-pr: devops-bot
+  analyze-code: claude-opus
+  security-review: claude-sonnet
+  performance-check: claude-sonnet
+  post-comment: devops-bot
+  apply-approval: devops-bot
+  notify-team: notification-bot

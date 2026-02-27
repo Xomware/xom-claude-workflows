@@ -1,0 +1,230 @@
+---
+name: incident-response
+description: Automated incident triage, diagnosis, and mitigation
+version: "1.0"
+
+inputs:
+  incident_alert:
+    type: object
+    required: true
+  severity:
+    type: enum
+    enum: [critical, high, medium, low]
+    required: true
+  affected_service:
+    type: string
+    required: true
+  runbook_key:
+    type: string
+    required: false
+
+outputs:
+  incident_id:
+    type: string
+  initial_assessment:
+    type: object
+  actions_taken:
+    type: array
+  resolution_status:
+    type: enum
+    enum: [resolved, mitigated, escalated, needs_investigation]
+
+triggers:
+  - type: pagerduty-webhook
+    events: [incident.triggered]
+  - type: webhook
+    path: "/incidents/alert"
+  - type: manual
+
+steps:
+  - id: receive-alert
+    name: "Receive & Parse Alert"
+    agent: incident-coordinator
+    timeout: 30s
+    input:
+      alert: ${{ inputs.incident_alert }}
+      severity: ${{ inputs.severity }}
+    output:
+      incident_id: string
+      parsed_alert: object
+      severity_confirmed: string
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  - id: initial-triage
+    name: "Initial Triage"
+    agent: incident-coordinator
+    timeout: 60s
+    depends_on: receive-alert
+    input:
+      alert: ${{ steps.receive-alert.output.parsed_alert }}
+      service: ${{ inputs.affected_service }}
+    output:
+      impact_estimate: object
+      affected_users: string
+      business_impact: string
+      initial_hypothesis: string
+    error_handling:
+      on_failure: log
+
+  - id: pull-context
+    name: "Pull Context"
+    agent: monitoring-bot
+    timeout: 120s
+    depends_on: receive-alert
+    input:
+      service: ${{ inputs.affected_service }}
+      incident_id: ${{ steps.receive-alert.output.incident_id }}
+      lookback_minutes: 30
+    output:
+      recent_logs: array
+      metrics: object
+      related_alerts: array
+    error_handling:
+      retry_attempts: 2
+      on_failure: log
+
+  - id: run-diagnostics
+    name: "Run Diagnostics"
+    agent: devops-bot
+    timeout: 120s
+    depends_on: [pull-context, initial-triage]
+    input:
+      service: ${{ inputs.affected_service }}
+      incident_id: ${{ steps.receive-alert.output.incident_id }}
+    output:
+      diagnostic_results: object
+      system_status: string
+      error_logs: array
+    error_handling:
+      retry_attempts: 2
+      on_failure: log
+
+  - id: analyze-root-cause
+    name: "Analyze Root Cause"
+    agent: claude-opus
+    timeout: 180s
+    depends_on: [run-diagnostics, pull-context]
+    input:
+      hypothesis: ${{ steps.initial-triage.output.initial_hypothesis }}
+      logs: ${{ steps.pull-context.output.recent_logs }}
+      metrics: ${{ steps.pull-context.output.metrics }}
+      diagnostics: ${{ steps.run-diagnostics.output.diagnostic_results }}
+    output:
+      root_cause: string
+      confidence: number
+      affected_components: array
+    error_handling:
+      retry_attempts: 1
+      on_failure: log
+
+  - id: determine-mitigation
+    name: "Determine Mitigation"
+    agent: claude-opus
+    timeout: 120s
+    depends_on: analyze-root-cause
+    input:
+      root_cause: ${{ steps.analyze-root-cause.output.root_cause }}
+      service: ${{ inputs.affected_service }}
+      severity: ${{ inputs.severity }}
+    output:
+      remediation_steps: array
+      estimated_time: number
+      risk_level: string
+    error_handling:
+      on_failure: escalate
+
+  - id: execute-runbook
+    name: "Execute Runbook"
+    agent: devops-bot
+    timeout: 300s
+    depends_on: determine-mitigation
+    condition: ${{ inputs.runbook_key != null }}
+    input:
+      runbook_key: ${{ inputs.runbook_key }}
+      service: ${{ inputs.affected_service }}
+      remediation: ${{ steps.determine-mitigation.output.remediation_steps }}
+    output:
+      execution_complete: boolean
+      actions_executed: array
+    error_handling:
+      retry_attempts: 1
+      on_failure: log
+
+  - id: escalate-if-critical
+    name: "Escalate If Needed"
+    agent: incident-coordinator
+    timeout: 30s
+    depends_on: [determine-mitigation, execute-runbook]
+    condition: ${{ inputs.severity == 'critical' }}
+    input:
+      incident_id: ${{ steps.receive-alert.output.incident_id }}
+      root_cause: ${{ steps.analyze-root-cause.output.root_cause }}
+    output:
+      escalated: boolean
+      on_call_notified: boolean
+    error_handling:
+      on_failure: retry
+
+  - id: communicate-status
+    name: "Communicate Status"
+    agent: notification-bot
+    timeout: 30s
+    depends_on: [initial-triage, determine-mitigation]
+    input:
+      incident_id: ${{ steps.receive-alert.output.incident_id }}
+      status: investigating
+      impact: ${{ steps.initial-triage.output.business_impact }}
+      channels: [slack, status_page]
+    error_handling:
+      on_failure: log_only
+
+  - id: monitor-recovery
+    name: "Monitor Recovery"
+    agent: monitoring-bot
+    timeout: 600s
+    depends_on: [execute-runbook, determine-mitigation]
+    input:
+      service: ${{ inputs.affected_service }}
+      incident_id: ${{ steps.receive-alert.output.incident_id }}
+      baseline_metrics: ${{ steps.pull-context.output.metrics }}
+    output:
+      recovered: boolean
+      recovery_time: number
+      metrics_normalized: boolean
+    error_handling:
+      on_failure: log
+
+  - id: start-postmortem
+    name: "Start Postmortem"
+    agent: kb-manager
+    timeout: 60s
+    depends_on: [monitor-recovery, analyze-root-cause]
+    input:
+      incident_id: ${{ steps.receive-alert.output.incident_id }}
+      root_cause: ${{ steps.analyze-root-cause.output.root_cause }}
+      timeline: "auto-generated"
+    output:
+      postmortem_url: string
+      postmortem_created: boolean
+    error_handling:
+      on_failure: log
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+  critical_failure: immediate_escalation
+
+observability:
+  log_level: info
+  metrics: [ttd, ttr, escalation_rate, resolution_rate]
+
+resources:
+  timeout_total: 1800s
+
+success_criteria:
+  - alert_parsed
+  - root_cause_identified
+  - actions_taken_or_escalated
+  - team_notified

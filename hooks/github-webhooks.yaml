@@ -1,0 +1,97 @@
+---
+name: "GitHub Webhooks Configuration"
+description: "GitHub webhook triggers for workflows"
+
+webhooks:
+  pull-request-opened:
+    url: "https://api.workflow.io/github/pr-opened"
+    event: pull_request
+    actions: [opened, synchronize]
+    triggers:
+      - workflow: code-review
+        inputs:
+          repo: ${{ github.repository }}
+          pr_number: ${{ github.event.pull_request.number }}
+          review_type: full
+    secret: ${{ GITHUB_WEBHOOK_SECRET }}
+
+  pr-labeled:
+    url: "https://api.workflow.io/github/pr-labeled"
+    event: pull_request
+    actions: [labeled]
+    filter: 'contains(labels, "review-needed")'
+    triggers:
+      - workflow: code-review
+        inputs:
+          repo: ${{ github.repository }}
+          pr_number: ${{ github.event.pull_request.number }}
+          review_type: full
+          auto_approve: true
+    secret: ${{ GITHUB_WEBHOOK_SECRET }}
+
+  issue-feature-request:
+    url: "https://api.workflow.io/github/issue-feature"
+    event: issues
+    actions: [opened, labeled]
+    filter: 'contains(labels, "feature-request")'
+    triggers:
+      - workflow: feature-implementation
+        inputs:
+          feature_spec: ${{ github.event.issue.body }}
+          repo: ${{ github.repository }}
+          branch_base: main
+    secret: ${{ GITHUB_WEBHOOK_SECRET }}
+
+  release-published:
+    url: "https://api.workflow.io/github/release-published"
+    event: release
+    actions: [published]
+    triggers:
+      - workflow: automated-deployment
+        inputs:
+          repo: ${{ github.repository }}
+          version: ${{ github.event.release.tag_name }}
+          target_env: production
+          require_approval: true
+    secret: ${{ GITHUB_WEBHOOK_SECRET }}
+
+  push-to-docs:
+    url: "https://api.workflow.io/github/push-docs"
+    event: push
+    branch_filter: "main"
+    path_filter: "docs/**"
+    triggers:
+      - workflow: kb-generation
+        inputs:
+          source_type: docs
+          repo: ${{ github.repository }}
+          auto_publish: true
+    secret: ${{ GITHUB_WEBHOOK_SECRET }}
+
+  push-to-code:
+    url: "https://api.workflow.io/github/push-code"
+    event: push
+    branch_filter: "main"
+    triggers:
+      - workflow: automated-deployment
+        inputs:
+          repo: ${{ github.repository }}
+          version: ${{ github.event.after | slice: 0, 8 }}
+          target_env: staging
+    secret: ${{ GITHUB_WEBHOOK_SECRET }}
+
+# Configuration
+configuration:
+  delivery_timeout: 10s
+  max_retries: 3
+  retry_backoff: exponential
+  events_to_log: [all]
+  
+# Security
+security:
+  validate_signature: true
+  require_https: true
+  allowed_ips:
+    - 140.82.112.0/20
+    - 143.55.64.0/20
+  rate_limit: 1000_per_hour

@@ -1,0 +1,191 @@
+---
+name: research-pipeline
+description: Multi-agent research, synthesis, and reporting
+version: "1.0"
+
+inputs:
+  research_topic:
+    type: string
+    required: true
+  scope:
+    type: enum
+    enum: [narrow, broad]
+    required: false
+    default: broad
+  sources_limit:
+    type: integer
+    required: false
+    default: 50
+  output_format:
+    type: enum
+    enum: [report, slides, summary]
+    required: false
+    default: report
+
+outputs:
+  research_report:
+    type: string
+  key_findings:
+    type: array
+  sources_cited:
+    type: array
+  confidence_scores:
+    type: object
+
+triggers:
+  - type: manual
+  - type: slack-webhook
+    command: /research
+  - type: schedule
+    cron: "0 9 * * 1"
+    description: "Weekly Monday research"
+
+steps:
+  - id: define-research-plan
+    name: "Define Research Plan"
+    agent: claude-opus
+    timeout: 120s
+    input:
+      topic: ${{ inputs.research_topic }}
+      scope: ${{ inputs.scope }}
+    output:
+      research_strategy: string
+      key_questions: array
+      search_queries: array
+      expected_sources: integer
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  - id: search-sources
+    name: "Search Sources"
+    agent: research-bot
+    timeout: 300s
+    depends_on: define-research-plan
+    input:
+      queries: ${{ steps.define-research-plan.output.search_queries }}
+      limit: ${{ inputs.sources_limit }}
+    output:
+      sources: array
+      source_count: integer
+      search_complete: boolean
+    error_handling:
+      retry_attempts: 2
+      on_failure: log
+
+  - id: parallel-analysis
+    name: "Parallel Source Analysis"
+    type: parallel
+    worker_count: 4
+    timeout: 600s
+    depends_on: search-sources
+    
+    worker_steps:
+      - id: analyze-source
+        agent: claude-sonnet
+        timeout: 120s
+        input:
+          source: ${{ parallel.source }}
+          index: ${{ parallel.index }}
+          topic: ${{ inputs.research_topic }}
+        output:
+          key_points: array
+          relevance_score: number
+          confidence: number
+          citations: array
+        error_handling:
+          retry_attempts: 1
+          on_failure: continue
+
+  - id: synthesis
+    name: "Synthesize Findings"
+    agent: claude-opus
+    timeout: 300s
+    depends_on: parallel-analysis
+    input:
+      all_analyses: ${{ steps.parallel-analysis.output }}
+      topic: ${{ inputs.research_topic }}
+    output:
+      synthesized_findings: array
+      patterns: array
+      contradictions: array
+      confidence_levels: object
+    error_handling:
+      retry_attempts: 1
+      on_failure: log
+
+  - id: quality-check
+    name: "Quality & Citation Check"
+    agent: research-validator
+    timeout: 120s
+    depends_on: synthesis
+    input:
+      findings: ${{ steps.synthesis.output.synthesized_findings }}
+      citations: ${{ steps.parallel-analysis.output.citations }}
+    output:
+      verification_complete: boolean
+      citation_errors: array
+      quality_score: number
+    error_handling:
+      on_failure: log
+
+  - id: generate-report
+    name: "Generate Report"
+    agent: claude-sonnet
+    timeout: 180s
+    depends_on: [synthesis, quality-check]
+    input:
+      findings: ${{ steps.synthesis.output.synthesized_findings }}
+      format: ${{ inputs.output_format }}
+      topic: ${{ inputs.research_topic }}
+    output:
+      report_content: string
+      formatted_report: object
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  - id: publish-report
+    name: "Publish Report"
+    agent: kb-manager
+    timeout: 60s
+    depends_on: generate-report
+    input:
+      report: ${{ steps.generate-report.output.formatted_report }}
+      topic: ${{ inputs.research_topic }}
+    output:
+      report_url: string
+      published: boolean
+    error_handling:
+      on_failure: log
+
+  - id: notify-team
+    name: "Notify Team"
+    agent: notification-bot
+    timeout: 10s
+    depends_on: [publish-report, quality-check]
+    input:
+      report_url: ${{ steps.publish-report.output.report_url }}
+      findings_count: ${{ steps.synthesis.output.synthesized_findings.length }}
+      quality_score: ${{ steps.quality-check.output.quality_score }}
+    error_handling:
+      on_failure: log_only
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+
+observability:
+  log_level: info
+  metrics: [research_duration, sources_analyzed, quality_score]
+
+resources:
+  timeout_total: 1200s
+  max_concurrent_workers: 4
+
+success_criteria:
+  - sources_searched
+  - findings_synthesized
+  - quality_checked
+  - report_published
+  - team_notified

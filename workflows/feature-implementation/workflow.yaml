@@ -1,0 +1,200 @@
+---
+name: feature-implementation
+description: End-to-end feature development workflow
+version: "1.0"
+
+inputs:
+  feature_spec:
+    type: string
+    required: true
+  repo:
+    type: string
+    required: true
+  branch_base:
+    type: string
+    required: false
+    default: "main"
+  test_coverage_target:
+    type: float
+    required: false
+    default: 0.80
+
+outputs:
+  pr_url:
+    type: string
+  feature_branch:
+    type: string
+  test_results:
+    type: object
+  implementation_summary:
+    type: string
+
+triggers:
+  - type: manual
+  - type: slack-webhook
+    command: /implement-feature
+  - type: github-webhook
+    event: issues
+    actions: [labeled]
+    filter: 'contains(labels, "feature-request")'
+
+steps:
+  - id: parse-spec
+    name: "Parse Specification"
+    agent: claude-opus
+    timeout: 60s
+    input:
+      feature_spec: ${{ inputs.feature_spec }}
+    output:
+      requirements: array
+      acceptance_criteria: array
+      technical_considerations: object
+    error_handling:
+      retry_attempts: 1
+      on_failure: exit
+
+  - id: create-branch
+    name: "Create Feature Branch"
+    agent: devops-bot
+    timeout: 30s
+    depends_on: parse-spec
+    input:
+      repo: ${{ inputs.repo }}
+      base_branch: ${{ inputs.branch_base }}
+      feature_name: ${{ steps.parse-spec.output.feature_name }}
+    output:
+      branch_name: string
+      branch_created: boolean
+    error_handling:
+      retry_attempts: 2
+      on_failure: exit
+
+  - id: design-architecture
+    name: "Design Architecture"
+    agent: claude-opus
+    timeout: 120s
+    depends_on: parse-spec
+    input:
+      requirements: ${{ steps.parse-spec.output.requirements }}
+      acceptance_criteria: ${{ steps.parse-spec.output.acceptance_criteria }}
+    output:
+      architecture: object
+      modules: array
+      interfaces: object
+      design_decisions: string
+    error_handling:
+      retry_attempts: 1
+      on_failure: log
+
+  - id: implement-code
+    name: "Implement Code"
+    agent: claude-sonnet
+    timeout: 300s
+    depends_on: [design-architecture, create-branch]
+    input:
+      architecture: ${{ steps.design-architecture.output.architecture }}
+      modules: ${{ steps.design-architecture.output.modules }}
+      requirements: ${{ steps.parse-spec.output.requirements }}
+    output:
+      implementation: object
+      file_changes: array
+      code_files: object
+    error_handling:
+      retry_attempts: 2
+      backoff: exponential
+      on_failure: fallback_agent:claude-opus
+
+  - id: add-tests
+    name: "Add Tests"
+    agent: claude-sonnet
+    timeout: 180s
+    depends_on: implement-code
+    input:
+      implementation: ${{ steps.implement-code.output.implementation }}
+      acceptance_criteria: ${{ steps.parse-spec.output.acceptance_criteria }}
+    output:
+      test_suite: object
+      test_files: object
+      coverage_target: float
+    error_handling:
+      retry_attempts: 1
+      on_failure: log
+
+  - id: validate-tests
+    name: "Validate Tests"
+    agent: devops-bot
+    timeout: 120s
+    depends_on: add-tests
+    input:
+      test_files: ${{ steps.add-tests.output.test_files }}
+      branch: ${{ steps.create-branch.output.branch_name }}
+      repo: ${{ inputs.repo }}
+    output:
+      test_results: object
+      coverage: float
+      passed: boolean
+    error_handling:
+      retry_attempts: 2
+      on_failure: log
+
+  - id: create-pr
+    name: "Create Pull Request"
+    agent: devops-bot
+    timeout: 30s
+    depends_on: [implement-code, add-tests]
+    input:
+      repo: ${{ inputs.repo }}
+      branch: ${{ steps.create-branch.output.branch_name }}
+      base: ${{ inputs.branch_base }}
+      title: ${{ steps.parse-spec.output.title }}
+      description: ${{ steps.design-architecture.output.design_decisions }}
+    output:
+      pr_url: string
+      pr_number: integer
+    error_handling:
+      retry_attempts: 2
+      on_failure: exit
+
+  - id: post-review
+    name: "Post Review Request"
+    agent: devops-bot
+    timeout: 30s
+    depends_on: create-pr
+    input:
+      repo: ${{ inputs.repo }}
+      pr_number: ${{ steps.create-pr.output.pr_number }}
+      reviewers: ["team"]
+      labels: ["feature-implementation", "auto-generated"]
+    error_handling:
+      on_failure: log
+
+  - id: notify-team
+    name: "Notify Team"
+    agent: notification-bot
+    timeout: 10s
+    depends_on: [create-pr, validate-tests]
+    input:
+      feature: ${{ inputs.feature_spec }}
+      pr_url: ${{ steps.create-pr.output.pr_url }}
+      coverage: ${{ steps.validate-tests.output.coverage }}
+      status: "ready_for_review"
+    error_handling:
+      on_failure: log_only
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+  on_critical_failure: human_review
+
+observability:
+  log_level: info
+  metrics: [implementation_time, coverage, test_pass_rate]
+
+resources:
+  timeout_total: 900s
+
+success_criteria:
+  - pr_created
+  - tests_passing
+  - coverage_at_target
+  - team_notified

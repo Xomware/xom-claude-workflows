@@ -1,0 +1,246 @@
+---
+name: automated-deployment
+description: Build, test, secure, and deploy applications
+version: "1.0"
+
+inputs:
+  repo:
+    type: string
+    required: true
+  version:
+    type: string
+    required: true
+  target_env:
+    type: enum
+    enum: [staging, production]
+    required: true
+  require_approval:
+    type: boolean
+    required: false
+    default: true
+
+outputs:
+  deployment_id:
+    type: string
+  build_status:
+    type: enum
+    enum: [success, failed]
+  security_scan_results:
+    type: object
+  deployment_status:
+    type: enum
+    enum: [pending, in_progress, completed, failed]
+
+triggers:
+  - type: github-webhook
+    event: release
+    actions: [published]
+  - type: manual
+  - type: schedule
+    cron: "0 2 * * *"
+    description: "Daily 2 AM deployment to staging"
+
+steps:
+  - id: checkout-code
+    name: "Checkout Code"
+    agent: devops-bot
+    timeout: 60s
+    input:
+      repo: ${{ inputs.repo }}
+      version: ${{ inputs.version }}
+    output:
+      source_path: string
+      checkout_complete: boolean
+    error_handling:
+      retry_attempts: 2
+      on_failure: exit
+
+  - id: build-application
+    name: "Build Application"
+    agent: devops-bot
+    timeout: 300s
+    depends_on: checkout-code
+    input:
+      source_path: ${{ steps.checkout-code.output.source_path }}
+      version: ${{ inputs.version }}
+    output:
+      build_status: enum
+      build_artifacts: array
+      build_time: number
+    error_handling:
+      retry_attempts: 2
+      on_failure: exit
+
+  - id: run-tests
+    name: "Run Tests"
+    agent: devops-bot
+    timeout: 300s
+    depends_on: build-application
+    input:
+      source_path: ${{ steps.checkout-code.output.source_path }}
+      artifacts: ${{ steps.build-application.output.build_artifacts }}
+    output:
+      test_results: object
+      tests_passed: boolean
+      coverage: float
+    error_handling:
+      retry_attempts: 1
+      on_failure: log
+
+  - id: security-scan
+    name: "Security Scan"
+    agent: security-scanner
+    timeout: 180s
+    depends_on: build-application
+    input:
+      build_artifacts: ${{ steps.build-application.output.build_artifacts }}
+      version: ${{ inputs.version }}
+    output:
+      vulnerabilities: array
+      critical_count: integer
+      scan_complete: boolean
+    error_handling:
+      retry_attempts: 1
+      on_failure: log
+
+  - id: check-security
+    name: "Check Security Gate"
+    agent: claude-sonnet
+    timeout: 30s
+    depends_on: security-scan
+    condition: ${{ steps.security-scan.output.critical_count > 0 }}
+    input:
+      vulnerabilities: ${{ steps.security-scan.output.vulnerabilities }}
+    output:
+      should_block: boolean
+      risk_level: string
+    error_handling:
+      on_failure: exit
+
+  - id: create-artifacts
+    name: "Create Artifacts"
+    agent: devops-bot
+    timeout: 120s
+    depends_on: [build-application, run-tests]
+    input:
+      build_artifacts: ${{ steps.build-application.output.build_artifacts }}
+      version: ${{ inputs.version }}
+      environment: ${{ inputs.target_env }}
+    output:
+      artifact_url: string
+      docker_image: string
+      artifact_sha: string
+    error_handling:
+      retry_attempts: 2
+      on_failure: exit
+
+  - id: deploy-staging
+    name: "Deploy to Staging"
+    agent: devops-bot
+    timeout: 300s
+    depends_on: create-artifacts
+    input:
+      artifact_url: ${{ steps.create-artifacts.output.artifact_url }}
+      environment: staging
+    output:
+      deployment_complete: boolean
+      staging_url: string
+    error_handling:
+      retry_attempts: 2
+      backoff: exponential
+      on_failure: exit
+
+  - id: smoke-tests
+    name: "Run Smoke Tests"
+    agent: devops-bot
+    timeout: 180s
+    depends_on: deploy-staging
+    input:
+      staging_url: ${{ steps.deploy-staging.output.staging_url }}
+    output:
+      smoke_tests_passed: boolean
+      health_status: string
+    error_handling:
+      retry_attempts: 2
+      on_failure: log
+
+  - id: approval-gate
+    name: "Approval Gate"
+    agent: orchestrator
+    timeout: 300s
+    depends_on: [smoke-tests, security-scan]
+    condition: ${{ inputs.target_env == 'production' and inputs.require_approval == true }}
+    input:
+      build_status: ${{ steps.build-application.output.build_status }}
+      tests_passed: ${{ steps.run-tests.output.tests_passed }}
+      security_issues: ${{ steps.security-scan.output.critical_count }}
+    output:
+      approval_received: boolean
+      approved_by: string
+    error_handling:
+      on_failure: escalate
+
+  - id: deploy-production
+    name: "Deploy to Production"
+    agent: devops-bot
+    timeout: 300s
+    depends_on: approval-gate
+    condition: ${{ inputs.target_env == 'production' }}
+    input:
+      artifact_url: ${{ steps.create-artifacts.output.artifact_url }}
+      environment: production
+      strategy: blue-green
+    output:
+      deployment_complete: boolean
+      prod_url: string
+      rollback_available: boolean
+    error_handling:
+      retry_attempts: 1
+      backoff: exponential
+      on_failure: [rollback, escalate]
+
+  - id: health-check
+    name: "Health Check"
+    agent: monitoring-bot
+    timeout: 120s
+    depends_on: [deploy-production, deploy-staging]
+    input:
+      target_url: ${{ if inputs.target_env == 'production' then steps.deploy-production.output.prod_url else steps.deploy-staging.output.staging_url }}
+      environment: ${{ inputs.target_env }}
+    output:
+      health_status: string
+      all_services_healthy: boolean
+    error_handling:
+      retry_attempts: 3
+      backoff: linear
+      on_failure: escalate
+
+  - id: post-deployment
+    name: "Post-Deployment"
+    agent: notification-bot
+    timeout: 30s
+    depends_on: health-check
+    input:
+      version: ${{ inputs.version }}
+      environment: ${{ inputs.target_env }}
+      status: ${{ steps.health-check.output.health_status }}
+    error_handling:
+      on_failure: log_only
+
+error_handling:
+  default_retry_attempts: 2
+  default_backoff: exponential
+  on_critical_failure: rollback
+
+observability:
+  log_level: info
+  metrics: [build_time, test_coverage, deployment_time, success_rate]
+
+resources:
+  timeout_total: 1200s
+
+success_criteria:
+  - build_successful
+  - tests_passing
+  - deployment_complete
+  - health_check_passed
