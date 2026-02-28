@@ -1,7 +1,63 @@
 ---
 name: feature-implementation
-description: End-to-end feature development workflow
-version: "1.0"
+description: End-to-end feature development workflow with pre-merge gates
+version: "2.0"
+
+# ─────────────────────────────────────────────────────────────────
+# HOOKS — Run deterministically before/after each step
+# ─────────────────────────────────────────────────────────────────
+hooks:
+  pre_workflow:
+    - name: "validate_inputs"
+      enabled: true
+    - name: "check_permissions"
+      enabled: true
+    - name: "mcp_scope_check"
+      description: "Confirm active MCPs ≤10"
+      enabled: true
+  pre_step:
+    - name: "route_model"
+      enabled: true
+      routing_rules:
+        parse_spec: "claude-sonnet-4-5"        # Medium complexity
+        design_architecture: "claude-opus-4-5"  # Complex reasoning
+        implement_code: "claude-sonnet-4-5"     # Code generation
+        add_tests: "claude-sonnet-4-5"          # Code generation
+        other: "claude-haiku-4-5"              # Simple steps → Haiku
+  post_workflow:
+    - name: "cost_tracker"
+      enabled: true
+
+# ─────────────────────────────────────────────────────────────────
+# PRE-MERGE GATES — All must pass before PR is auto-merged
+# ─────────────────────────────────────────────────────────────────
+pre_merge_gates:
+  - type: "compile_check"
+    enabled: true
+    fail_action: "block_merge"
+  - type: "test_coverage"
+    min_coverage: 0.80
+    enabled: true
+    fail_action: "block_merge"
+  - type: "lint"
+    enabled: true
+    fail_action: "block_merge"
+  - type: "security_scan"
+    fail_on: ["critical", "prompt_injection"]
+    enabled: true
+    fail_action: "block_merge"
+
+# ─────────────────────────────────────────────────────────────────
+# MCP TOOLS — Max 10 active across all steps
+# ─────────────────────────────────────────────────────────────────
+mcp_tools:
+  max_active: 10
+  whitelist:
+    - "github"
+    - "supabase"
+    - "slack"
+  temp_tool_allowed: true
+  temp_tool_auto_remove: true
 
 inputs:
   feature_spec:
@@ -17,7 +73,7 @@ inputs:
   test_coverage_target:
     type: float
     required: false
-    default: 0.80
+    default: 0.80            # Minimum — pre-merge gate enforces this
 
 outputs:
   pr_url:

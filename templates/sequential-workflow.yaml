@@ -2,8 +2,17 @@
 # Sequential Workflow Template
 # Use this template for workflows where each step must complete before the next begins.
 # Output of each step flows to the next.
+#
+# ═══════════════════════════════════════════════════════════════
+# REQUIRED BEST PRACTICES (applied to all Xomware workflows):
+#
+# 1. HOOKS FRAMEWORK — deterministic checks before/after LLM steps
+# 2. MCP DISCIPLINE  — max 10 active tools at any time
+# 3. MODEL ROUTING   — Haiku for simple, Sonnet for code, Opus for complex
+# 4. PRE-MERGE GATES — compile + 80% coverage + lint + security
+# ═══════════════════════════════════════════════════════════════
 
-version: "1.0"
+version: "2.0"
 name: "sequential-workflow-template"
 description: "Template for sequential, step-by-step workflows"
 
@@ -32,6 +41,63 @@ triggers:
   - type: webhook
     path: "/workflows/sequential"
     method: POST
+
+# ─────────────────────────────────────────────────────────────────
+# HOOKS — Deterministic logic, no LLM cost
+# ─────────────────────────────────────────────────────────────────
+hooks:
+  pre_workflow:
+    - name: "validate_inputs"
+      description: "Schema validation before any LLM step fires"
+      enabled: true
+    - name: "check_permissions"
+      description: "ACL check — block unauthorized callers"
+      enabled: true
+    - name: "mcp_scope_check"
+      description: "Verify active MCPs ≤10"
+      enabled: true
+  pre_step:
+    - name: "route_model"
+      description: "Classify step complexity → assign Haiku/Sonnet/Opus"
+      enabled: true
+      routing_rules:
+        simple: "claude-haiku-4-5"
+        medium: "claude-sonnet-4-5"
+        complex: "claude-opus-4-5"
+  post_workflow:
+    - name: "cost_tracker"
+      description: "Log total token usage and cost for this run"
+      enabled: true
+
+# ─────────────────────────────────────────────────────────────────
+# MCP TOOLS — Max 10 active at any time across all steps
+# ─────────────────────────────────────────────────────────────────
+mcp_tools:
+  max_active: 10
+  whitelist:
+    - "github"
+    - "slack"
+  temp_tool_allowed: true
+  temp_tool_auto_remove: true
+
+# ─────────────────────────────────────────────────────────────────
+# PRE-MERGE GATES — Applied to any code-producing steps
+# ─────────────────────────────────────────────────────────────────
+pre_merge_gates:
+  - type: "compile_check"
+    enabled: true
+    fail_action: "block_merge"
+  - type: "test_coverage"
+    min_coverage: 0.80
+    enabled: true
+    fail_action: "block_merge"
+  - type: "lint"
+    enabled: true
+    fail_action: "block_merge"
+  - type: "security_scan"
+    fail_on: ["critical", "prompt_injection"]
+    enabled: true
+    fail_action: "block_merge"
 
 steps:
   # Step 1: Input validation and preparation

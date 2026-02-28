@@ -2,6 +2,21 @@
 
 A comprehensive, production-ready repository of Claude-powered workflows for distributed multi-agent automation, orchestration, and integration.
 
+## Best Practices: The Four Pillars
+
+All workflows in this repository implement four required patterns:
+
+| Pillar | Rule | Why |
+|--------|------|-----|
+| **Hooks Framework** | Deterministic code before/after every LLM step | Zero-cost validation, model routing, rate limiting |
+| **MCP Discipline** | Max 10 active MCP tools across all steps | Context hygiene, fewer hallucinations |
+| **Model Routing** | Haiku → simple steps, Sonnet → code, Opus → complex | ~50% cost reduction |
+| **Pre-Merge Gates** | Compile + 80% coverage + lint + security scan | Deterministic quality, high PR approval rate |
+
+See [`docs/workflow-development.md`](docs/workflow-development.md) for implementation details.
+
+---
+
 ## Overview
 
 This repository contains:

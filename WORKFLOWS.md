@@ -2,6 +2,23 @@
 
 Detailed reference for all 8 production workflows included in this repository.
 
+## Engineering Standards (Applied to All Workflows)
+
+| Standard | Rule |
+|----------|------|
+| **Hooks** | Pre/post-invoke deterministic checks on every LLM step |
+| **MCP Cap** | Max 10 active MCP tools per workflow run |
+| **Model Routing** | Haiku (simple) / Sonnet (code) / Opus (complex) |
+| **Pre-Merge Gates** | Compile + 80% coverage + lint + security scan — all must pass |
+
+### Model Names (current)
+- `claude-haiku-4-5` — Fast, cheap (~$0.01/task)
+- `claude-sonnet-4-5` — Balanced, default for code (~$0.05/task)
+- `claude-opus-4-5` — Complex reasoning (~$0.15/task)
+
+### Coverage Standard
+Minimum unit test coverage is **80%** (raised from legacy 70%). The pre-merge gate enforces this deterministically.
+
 ---
 
 ## 1. Code Review Workflow
