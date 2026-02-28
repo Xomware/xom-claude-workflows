@@ -515,6 +515,69 @@ publishing:
 
 ---
 
+---
+
+## 9. TDD Workflow (Test-Driven Development)
+
+**File:** `workflows/tdd-workflow/WORKFLOW.md`
+
+### Purpose
+Enforce Test-Driven Development as the default development mode. Every feature, bug fix, and refactor follows the RED→GREEN→REFACTOR cycle with mandatory 80% coverage gate.
+
+### Inputs
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `requirement` | string | yes | Feature spec, issue description, or bug report |
+| `repo` | string | yes | Target GitHub repository |
+| `test_framework` | enum | no | `jest`, `pytest`, `vitest` (auto-detected if not set) |
+| `coverage_target` | float | no | Minimum coverage % (default: 80) |
+
+### Outputs
+| Field | Type | Description |
+|-------|------|-------------|
+| `test_files` | array | Generated test files |
+| `coverage_report` | object | Statement, branch, function, line percentages |
+| `red_confirmed` | boolean | Tests failed before implementation |
+| `pr_url` | string | Created pull request URL |
+
+### Steps
+1. **parse-requirement** — tdd-guide parses spec into testable behaviors
+2. **generate-tests** — tdd-guide writes failing test suite (RED)
+3. **confirm-red** — Run tests, verify they fail as expected
+4. **implement** — claude-sonnet writes minimal implementation (GREEN)
+5. **confirm-green** — Run tests, verify all pass
+6. **refactor** — tdd-guide suggests improvements; apply and re-test
+7. **coverage-gate** — Enforce ≥80% coverage threshold
+8. **create-pr** — devops-bot creates pull request
+
+### Agents
+- **tdd-guide** — Test generation, RED/GREEN/REFACTOR coaching
+- **claude-sonnet** — Minimal implementation
+- **devops-bot** — Git operations, test execution
+
+### Triggers
+- Manual trigger for any feature or bug fix
+- GitHub issue labeled `feature-request` or `bug`
+- Default mode within `feature-implementation` workflow
+
+### Error Handling
+```yaml
+on_coverage_below_threshold:
+  action: generate_additional_tests
+  max_attempts: 2
+on_test_failure:
+  action: revert_implementation
+  notify: developer
+```
+
+### Success Criteria
+- All tests pass
+- Coverage ≥ 80% for new code
+- RED phase confirmed (tests failed before implementation)
+- PR created with test/coverage summary
+
+---
+
 ## Common Patterns
 
 ### Error Handling Pattern
