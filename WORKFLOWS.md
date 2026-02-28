@@ -572,6 +572,83 @@ xom-cli workflow metrics --workflow <name>
 
 ---
 
+---
+
+## 10. Eval-Driven Development (EDD)
+
+**File:** `workflows/eval-driven-development/WORKFLOW.md`
+
+### Purpose
+Eval-Driven Development is a methodology for building reliable AI workflows. Define evaluations (evals) before writing any prompt or AI logic. Track pass@k metrics over time. Detect and block regressions automatically.
+
+### The EDD Lifecycle
+1. **Define** — Write evals before any implementation
+2. **Baseline** — Establish current pass@k score
+3. **Implement** — Build prompts/code to pass evals
+4. **Measure** — Record pass@k metrics
+5. **Iterate** — Improve until threshold met
+6. **Guard** — Lock evals in CI, alert on regression
+
+### Inputs
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `capability` | string | yes | AI capability being developed |
+| `eval_suite` | string | yes | Path to eval YAML files |
+| `model` | string | yes | LLM model to evaluate |
+| `k` | integer | no | Runs per eval (default: 10) |
+| `threshold` | float | no | Minimum pass@1 (default: 0.80) |
+
+### Outputs
+| Field | Type | Description |
+|-------|------|-------------|
+| `pass_at_1` | float | Probability first response is correct |
+| `pass_at_5` | float | Probability at least 1 of 5 is correct |
+| `pass_at_k` | float | Full pass@k result |
+| `regression_detected` | boolean | Whether score dropped vs baseline |
+| `failure_examples` | array | Sample failures for debugging |
+
+### Eval Categories
+| Category | What It Tests |
+|----------|--------------|
+| Format | JSON validity, schema compliance |
+| Content | Factual correctness, completeness |
+| Safety | Refusal rate for adversarial inputs |
+| Consistency | Same input → similar output |
+| Edge case | Empty, long, multilingual inputs |
+
+### Standard Thresholds
+| Use Case | pass@1 Minimum |
+|----------|---------------|
+| Critical (billing, auth) | 0.95 |
+| Standard feature | 0.80 |
+| Experimental | 0.60 |
+
+### Triggers
+- PR opened with changes to any AI prompt or agent config
+- Model version change
+- Manual eval run via CLI
+- Scheduled weekly regression check
+
+### Error Handling
+```yaml
+on_regression_detected:
+  threshold: 0.10  # drop > 10% from baseline
+  action: fail_ci
+  alert: slack_ai_quality
+  require_review: true
+on_below_threshold:
+  action: fail_ci
+  post_report: true
+```
+
+### Success Criteria
+- All evals pass at defined threshold
+- No regression detected vs baseline
+- Eval results recorded to metrics store
+- Report posted to PR
+
+---
+
 ## Next Steps
 
 1. **Customize workflows** for your environment
@@ -579,5 +656,6 @@ xom-cli workflow metrics --workflow <name>
 3. **Set up monitoring** and alerting
 4. **Run test executions** before production
 5. **Document your custom workflows** using this template
+6. **Adopt EDD for AI features** — Write evals in `evals/` before any prompt work
 
 See [docs/workflow-development.md](docs/workflow-development.md) for detailed customization guide.
