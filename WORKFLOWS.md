@@ -1,6 +1,6 @@
 # WORKFLOWS.md — Complete Reference
 
-Detailed reference for all production workflows included in this repository.
+Detailed reference for all 8 production workflows included in this repository.
 
 ---
 
@@ -578,6 +578,85 @@ on_test_failure:
 
 ---
 
+## 10. Context Aliases Workflow
+
+**File:** `workflows/context-aliases/WORKFLOW.md`
+
+### Purpose
+Role-specific shell aliases that inject focused system prompts into Claude sessions. Replace a bloated catch-all context with lean, purpose-built roles for development, review, research, and infrastructure work.
+
+### Aliases
+
+| Alias | Mode | Focus |
+|-------|------|-------|
+| `claude-dev` | Developer | Implementation, tests, type safety, explicit code |
+| `claude-review` | Code Reviewer | Correctness, security, performance, standards |
+| `claude-research` | Analyst | Comprehensive analysis, tradeoffs, alternatives |
+| `claude-infra` | SRE/DevOps | Safety, cost, rollback plans, least-privilege |
+
+### Installation
+
+```bash
+# Source the aliases file
+source workflows/context-aliases/aliases.sh
+
+# Install context files globally
+install-claude-contexts  # copies to ~/.claude/contexts/
+```
+
+### Design Principles
+- Keep base `~/.claude/` context minimal (identity + memory only)
+- Load role behavior on demand via aliases
+- One alias per session — pick the primary mode
+- Iterate context files as you learn what works
+
+### Files
+- `workflows/context-aliases/aliases.sh` — Alias definitions with fallback resolution
+- `workflows/context-aliases/contexts/dev.md` — Developer context (implementation, type safety, tests)
+- `workflows/context-aliases/contexts/review.md` — Code reviewer context (correctness, security, performance)
+- `workflows/context-aliases/contexts/research.md` — Research/analysis context (comprehensive, sourced)
+- `workflows/context-aliases/contexts/infra.md` — Infrastructure context (safety, cost, rollback)
+
+---
+
+## 11. Research-First Development Workflow
+
+**File:** `workflows/research-first/WORKFLOW.md`
+
+### Purpose
+Enforce a mandatory research phase before any new implementation. Prevent reinventing wheels, reduce maintenance burden, and force deliberate build-vs-adopt decisions.
+
+**Rule:** No new dependency, library, or significant feature may be implemented without completing the research checklist.
+
+### The Five-Step Protocol
+
+1. **Search GitHub** for existing implementations (`gh search repos`)
+2. **Check npm/PyPI/Cargo** for available packages
+3. **Check web/official docs** — may be a native platform feature
+4. **Evaluate** — Adopt as-is, Fork, Build custom, or Buy/SaaS
+5. **Document the decision** — Create a decision record in `docs/decisions/`
+
+### Time Budget
+
+| Step | Time Box |
+|------|----------|
+| GitHub search | 15 min |
+| Package registry search | 20 min |
+| Docs/web search | 15 min |
+| Evaluation + decision record | 10 min |
+| **Total** | **~60 min** |
+
+### Defaults
+- **Adopt > Fork > Build** — Require explicit reasons to build custom
+- Decision records stored in `docs/decisions/` or as GitHub issue comments
+- Research may be skipped only for <50-line domain-specific logic with no generic equivalent
+
+### Files
+- `workflows/research-first/research-checklist.md` — Pre-implementation checklist
+- `workflows/research-first/search-commands.md` — Curated search commands for all ecosystems
+
+---
+
 ## Common Patterns
 
 ### Error Handling Pattern
@@ -637,141 +716,78 @@ xom-cli workflow metrics --workflow <name>
 
 ---
 
-## 9. Context Aliases Workflow
+## 10. Eval-Driven Development (EDD)
 
-**File:** `workflows/context-aliases/WORKFLOW.md`
-
-### Purpose
-Role-specific shell aliases that inject focused system prompts into Claude sessions. Replace a bloated catch-all context with lean, purpose-built roles for development, review, research, and infrastructure work.
-
-### Aliases
-
-| Alias | Mode | Focus |
-|-------|------|-------|
-| `claude-dev` | Developer | Implementation, tests, type safety, explicit code |
-| `claude-review` | Code Reviewer | Correctness, security, performance, standards |
-| `claude-research` | Analyst | Comprehensive analysis, tradeoffs, alternatives |
-| `claude-infra` | SRE/DevOps | Safety, cost, rollback plans, least-privilege |
-
-### Installation
-
-```bash
-# Source the aliases file
-source workflows/context-aliases/aliases.sh
-
-# Install context files globally
-install-claude-contexts  # copies to ~/.claude/contexts/
-```
-
-### Design Principles
-- Keep base `~/.claude/` context minimal (identity + memory only)
-- Load role behavior on demand via aliases
-- One alias per session — pick the primary mode
-- Iterate context files as you learn what works
-
-**Files:**
-- `workflows/context-aliases/aliases.sh` — Alias definitions
-- `workflows/context-aliases/contexts/dev.md` — Developer context
-- `workflows/context-aliases/contexts/review.md` — Code reviewer context
-- `workflows/context-aliases/contexts/research.md` — Research/analysis context
-- `workflows/context-aliases/contexts/infra.md` — Infrastructure context
-
----
-
-## 10. Research-First Development Workflow
-
-**File:** `workflows/research-first/WORKFLOW.md`
+**File:** `workflows/eval-driven-development/WORKFLOW.md`
 
 ### Purpose
-Enforce a mandatory research phase before any new implementation. Prevent reinventing wheels, reduce maintenance burden, and force deliberate build-vs-adopt decisions.
+Eval-Driven Development is a methodology for building reliable AI workflows. Define evaluations (evals) before writing any prompt or AI logic. Track pass@k metrics over time. Detect and block regressions automatically.
 
-**Rule:** No new dependency, library, or significant feature may be implemented without completing the research checklist.
-
-### The Five-Step Protocol
-
-1. **Search GitHub** for existing implementations (`gh search repos`)
-2. **Check npm/PyPI/Cargo** for available packages
-3. **Check web/official docs** — may be a native platform feature
-4. **Evaluate** — Adopt as-is, Fork, Build custom, or Buy/SaaS
-5. **Document the decision** — Create a decision record in `docs/decisions/`
-
-### Time Budget
-
-| Step | Time Box |
-|------|----------|
-| GitHub search | 15 min |
-| Package registry search | 20 min |
-| Docs/web search | 15 min |
-| Evaluation + decision record | 10 min |
-| **Total** | **~60 min** |
-
-### Defaults
-- **Adopt > Fork > Build** — Require explicit reasons to build custom
-- Decision records stored in `docs/decisions/` or as GitHub issue comments
-- Research may be skipped only for <50-line domain-specific logic with no generic equivalent
-
-**Files:**
-- `workflows/research-first/research-checklist.md` — Pre-implementation checklist
-- `workflows/research-first/search-commands.md` — Curated search commands for all ecosystems
-
----
-
----
-
-## 11. 6-Phase Verification Loop
-
-**File:** `workflows/verification-loop/WORKFLOW.md`
-
-### Purpose
-Mandatory pre-PR quality gate. All 6 phases must pass before a pull request can be created or merged. Runs in CI (GitHub Actions) and locally via a single `npm run verify` / `make verify` command.
-
-### Phases
-| Phase | Check | Tool |
-|-------|-------|------|
-| 1 | Lint & Format | ESLint, Prettier, ruff, black |
-| 2 | Type Check | tsc, mypy, go vet |
-| 3 | Unit Tests | Jest, Vitest, pytest, go test |
-| 4 | Integration Tests | Jest, pytest, docker-compose |
-| 5 | Coverage Gate (≥80%) | istanbul, coverage.py |
-| 6 | Build Check | vite build, python -m build, go build |
+### The EDD Lifecycle
+1. **Define** — Write evals before any implementation
+2. **Baseline** — Establish current pass@k score
+3. **Implement** — Build prompts/code to pass evals
+4. **Measure** — Record pass@k metrics
+5. **Iterate** — Improve until threshold met
+6. **Guard** — Lock evals in CI, alert on regression
 
 ### Inputs
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `repo` | string | yes | Repository to run verification on |
-| `branch` | string | yes | Branch to verify |
-| `skip_integration` | boolean | no | Skip phase 4 with justification (default: false) |
-| `coverage_threshold` | float | no | Override coverage minimum (default: 80) |
+| `capability` | string | yes | AI capability being developed |
+| `eval_suite` | string | yes | Path to eval YAML files |
+| `model` | string | yes | LLM model to evaluate |
+| `k` | integer | no | Runs per eval (default: 10) |
+| `threshold` | float | no | Minimum pass@1 (default: 0.80) |
 
 ### Outputs
 | Field | Type | Description |
 |-------|------|-------------|
-| `verification_report` | object | Phase-by-phase results |
-| `overall_status` | enum | `pass`, `fail` |
-| `failed_phases` | array | List of failed phase names |
-| `coverage_metrics` | object | Statement, branch, function, line % |
-| `pr_blocked` | boolean | Whether PR creation is blocked |
+| `pass_at_1` | float | Probability first response is correct |
+| `pass_at_5` | float | Probability at least 1 of 5 is correct |
+| `pass_at_k` | float | Full pass@k result |
+| `regression_detected` | boolean | Whether score dropped vs baseline |
+| `failure_examples` | array | Sample failures for debugging |
+
+### Eval Categories
+| Category | What It Tests |
+|----------|--------------|
+| Format | JSON validity, schema compliance |
+| Content | Factual correctness, completeness |
+| Safety | Refusal rate for adversarial inputs |
+| Consistency | Same input → similar output |
+| Edge case | Empty, long, multilingual inputs |
+
+### Standard Thresholds
+| Use Case | pass@1 Minimum |
+|----------|---------------|
+| Critical (billing, auth) | 0.95 |
+| Standard feature | 0.80 |
+| Experimental | 0.60 |
 
 ### Triggers
-- Every push to a feature branch
-- Every pull request opened or updated
-- Manual trigger before creating a PR
+- PR opened with changes to any AI prompt or agent config
+- Model version change
+- Manual eval run via CLI
+- Scheduled weekly regression check
 
 ### Error Handling
 ```yaml
-on_phase_failure:
-  action: stop_pipeline
-  post_comment: true
-  block_pr_merge: true
-on_coverage_below_threshold:
-  action: fail_phase_5
-  report_uncovered_lines: true
+on_regression_detected:
+  threshold: 0.10  # drop > 10% from baseline
+  action: fail_ci
+  alert: slack_ai_quality
+  require_review: true
+on_below_threshold:
+  action: fail_ci
+  post_report: true
 ```
 
 ### Success Criteria
-- All 6 phases complete with PASS status
-- Coverage ≥ 80% across all metrics
-- Verification report posted to PR
+- All evals pass at defined threshold
+- No regression detected vs baseline
+- Eval results recorded to metrics store
+- Report posted to PR
 
 ---
 
@@ -782,7 +798,8 @@ on_coverage_below_threshold:
 3. **Set up monitoring** and alerting
 4. **Run test executions** before production
 5. **Document your custom workflows** using this template
-6. **Set up context aliases** — `source workflows/context-aliases/aliases.sh`
-7. **Adopt research-first discipline** — Run `workflows/research-first/research-checklist.md` before every new feature
+6. **Adopt EDD for AI features** — Write evals in `evals/` before any prompt work
+7. **Set up context aliases** — `source workflows/context-aliases/aliases.sh`
+8. **Adopt research-first discipline** — Run `workflows/research-first/research-checklist.md` before every new feature
 
 See [docs/workflow-development.md](docs/workflow-development.md) for detailed customization guide.

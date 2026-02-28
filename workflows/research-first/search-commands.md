@@ -43,9 +43,6 @@ npm search <keywords> --parseable | head -20
 # Get package details (downloads, dependencies, latest version)
 npm info <package-name> description version weeklyDownloads
 
-# Check download stats via npx
-npx npm-stat <package-name>
-
 # Find alternatives to a known package
 npm search "keywords:<tag-from-package-json>"
 
@@ -76,10 +73,7 @@ pip index versions <package-name>
 # Check if already installed / available
 pip list | grep -i <keyword>
 
-# Inspect a package without installing
-pip download <package-name> --no-deps -d /tmp/pkg && unzip -l /tmp/pkg/*.whl
-
-# Check stats on PyPI Stats: https://pypistats.org/packages/<package-name>
+# Check stats on PyPI Stats
 curl -s "https://pypistats.org/api/packages/<package-name>/recent" | python3 -m json.tool
 ```
 
@@ -91,17 +85,11 @@ curl -s "https://pypistats.org/api/packages/<package-name>/recent" | python3 -m 
 # Search on pkg.go.dev (use browser or curl)
 open "https://pkg.go.dev/search?q=<keywords>"
 
-# Check if a module is importable
-go list -m golang.org/x/...
-
-# View module info
-go list -m -json <module-path>@latest
-
 # Find what packages are already in your module graph
 go list -m all | grep <keyword>
 
-# Check module size and dependency count
-go mod graph | grep <package> | wc -l
+# View module info
+go list -m -json <module-path>@latest
 ```
 
 ---
@@ -112,34 +100,20 @@ go mod graph | grep <package> | wc -l
 # Search crates.io
 cargo search <keywords> --limit 10
 
-# Get crate details
-cargo info <crate-name>  # newer cargo versions
-
 # Check downloads and metadata
 curl -s "https://crates.io/api/v1/crates/<crate-name>" | jq '.crate | {downloads,recent_downloads,max_version,updated_at}'
-
-# Show features available in a crate
-cargo add <crate-name> --dry-run
 ```
 
 ---
 
 ## Web / Documentation Searches
 
-Use these search patterns in your browser or with `curl`/`jq`:
-
 ```bash
-# Search Stack Overflow via API
-open "https://api.stackexchange.com/2.3/search?order=desc&sort=votes&intitle=<encoded-query>&site=stackoverflow"
-
 # Find GitHub topics
 open "https://github.com/topics/<topic-keyword>"
 
 # Awesome lists (curated alternatives)
 gh search repos "awesome-<keyword>" --sort stars --limit 5
-
-# Find CNCF / Linux Foundation projects in a space
-open "https://landscape.cncf.io/?category=<category>"
 
 # Check a library's release cadence
 gh api /repos/<owner>/<repo>/releases --jq '.[0:5] | .[] | {tag_name, published_at}'
