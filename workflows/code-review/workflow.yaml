@@ -1,7 +1,56 @@
 ---
 name: code-review
 description: Automated code review with architectural and security analysis
-version: "1.0"
+version: "2.0"
+
+# ─────────────────────────────────────────────────────────────────
+# HOOKS — Deterministic before/after checks
+# ─────────────────────────────────────────────────────────────────
+hooks:
+  pre_workflow:
+    - name: "validate_inputs"
+      enabled: true
+    - name: "check_permissions"
+      enabled: true
+    - name: "mcp_scope_check"
+      description: "Confirm active MCPs ≤10"
+      enabled: true
+  pre_step:
+    - name: "route_model"
+      enabled: true
+      routing_rules:
+        analyze_code: "claude-opus-4-5"          # Complex architectural review
+        security_review: "claude-sonnet-4-5"     # Security analysis
+        performance_check: "claude-sonnet-4-5"   # Performance review
+        aggregate: "claude-sonnet-4-5"           # Aggregation
+        simple_steps: "claude-haiku-4-5"         # fetch, notify, etc.
+  post_workflow:
+    - name: "cost_tracker"
+      enabled: true
+
+# ─────────────────────────────────────────────────────────────────
+# QUALITY GATES — Enforced during review assessment
+# ─────────────────────────────────────────────────────────────────
+review_gates:
+  - type: "test_coverage"
+    min_coverage: 0.80              # Block approval if coverage <80%
+    fail_action: "request_changes"
+  - type: "lint"
+    fail_action: "request_changes"
+  - type: "security_scan"
+    fail_on: ["critical", "prompt_injection"]
+    fail_action: "request_changes"
+
+# ─────────────────────────────────────────────────────────────────
+# MCP TOOLS
+# ─────────────────────────────────────────────────────────────────
+mcp_tools:
+  max_active: 10
+  whitelist:
+    - "github"
+    - "slack"
+  temp_tool_allowed: true
+  temp_tool_auto_remove: true
 
 inputs:
   repo:

@@ -1,7 +1,7 @@
 ---
 agents:
   claude-opus:
-    model: "claude-opus-4"
+    model: "claude-opus-4-5"
     role: "Architect"
     specialization:
       - architectural_review
@@ -14,7 +14,7 @@ agents:
     temperature: 0.7
 
   claude-sonnet:
-    model: "claude-sonnet-4"
+    model: "claude-sonnet-4-5"
     role: "Code Quality Reviewer"
     specialization:
       - code_quality
