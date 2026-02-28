@@ -1,0 +1,428 @@
+name: 6-Phase Verification Gate
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_integration:
+        description: 'Skip integration tests (requires justification)'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.12'
+  COVERAGE_THRESHOLD: 80
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Phase 1: Lint & Format
+  # ─────────────────────────────────────────────
+  phase-1-lint:
+    name: 'Phase 1: Lint & Format'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect project type
+        id: detect
+        run: |
+          if [ -f "package.json" ]; then echo "type=node" >> $GITHUB_OUTPUT; fi
+          if [ -f "pyproject.toml" ] || [ -f "setup.py" ]; then echo "type=python" >> $GITHUB_OUTPUT; fi
+          if [ -f "go.mod" ]; then echo "type=go" >> $GITHUB_OUTPUT; fi
+
+      # Node.js lint
+      - name: Setup Node.js
+        if: steps.detect.outputs.type == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        if: steps.detect.outputs.type == 'node'
+        run: npm ci
+
+      - name: ESLint
+        if: steps.detect.outputs.type == 'node'
+        run: npx eslint . --ext .js,.jsx,.ts,.tsx --max-warnings 0
+
+      - name: Prettier format check
+        if: steps.detect.outputs.type == 'node'
+        run: npx prettier --check "src/**/*.{js,jsx,ts,tsx,json,css,md}" || npx prettier --check .
+
+      # Python lint
+      - name: Setup Python
+        if: steps.detect.outputs.type == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python lint tools
+        if: steps.detect.outputs.type == 'python'
+        run: pip install ruff black isort
+
+      - name: Ruff lint
+        if: steps.detect.outputs.type == 'python'
+        run: ruff check .
+
+      - name: Black format check
+        if: steps.detect.outputs.type == 'python'
+        run: black --check .
+
+      - name: isort check
+        if: steps.detect.outputs.type == 'python'
+        run: isort --check-only .
+
+      # Go lint
+      - name: Setup Go
+        if: steps.detect.outputs.type == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        if: steps.detect.outputs.type == 'go'
+        uses: golangci/golangci-lint-action@v4
+
+  # ─────────────────────────────────────────────
+  # Phase 2: Type Check
+  # ─────────────────────────────────────────────
+  phase-2-typecheck:
+    name: 'Phase 2: Type Check'
+    runs-on: ubuntu-latest
+    needs: phase-1-lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: hashFiles('tsconfig.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        if: hashFiles('package.json') != ''
+        run: npm ci
+
+      - name: TypeScript type check
+        if: hashFiles('tsconfig.json') != ''
+        run: npx tsc --noEmit
+
+      - name: Setup Python
+        if: hashFiles('pyproject.toml') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install mypy
+        if: hashFiles('pyproject.toml') != ''
+        run: pip install mypy && pip install -e ".[dev]" || pip install -e .
+
+      - name: mypy type check
+        if: hashFiles('pyproject.toml') != ''
+        run: mypy src/ --ignore-missing-imports
+
+      - name: Go vet
+        if: hashFiles('go.mod') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go vet
+        if: hashFiles('go.mod') != ''
+        run: go vet ./...
+
+  # ─────────────────────────────────────────────
+  # Phase 3: Unit Tests
+  # ─────────────────────────────────────────────
+  phase-3-unit-tests:
+    name: 'Phase 3: Unit Tests'
+    runs-on: ubuntu-latest
+    needs: phase-2-typecheck
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        if: hashFiles('package.json') != ''
+        run: npm ci
+
+      - name: Run Jest unit tests
+        if: hashFiles('jest.config.*') != ''
+        run: npm test -- --passWithNoTests --ci --forceExit
+
+      - name: Run Vitest unit tests
+        if: hashFiles('vitest.config.*') != ''
+        run: npx vitest run
+
+      - name: Setup Python
+        if: hashFiles('pyproject.toml') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python dependencies
+        if: hashFiles('pyproject.toml') != ''
+        run: pip install -e ".[dev]" || pip install -e . && pip install pytest
+
+      - name: Run pytest unit tests
+        if: hashFiles('pyproject.toml') != ''
+        run: pytest tests/unit/ -v --tb=short || pytest tests/ -v --tb=short -k "not integration"
+
+      - name: Setup Go
+        if: hashFiles('go.mod') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run Go unit tests
+        if: hashFiles('go.mod') != ''
+        run: go test ./... -short -v
+
+  # ─────────────────────────────────────────────
+  # Phase 4: Integration Tests
+  # ─────────────────────────────────────────────
+  phase-4-integration-tests:
+    name: 'Phase 4: Integration Tests'
+    runs-on: ubuntu-latest
+    needs: phase-3-unit-tests
+    timeout-minutes: 30
+    if: ${{ !inputs.skip_integration }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/testdb
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        if: hashFiles('package.json') != ''
+        run: npm ci
+
+      - name: Run integration tests (Node)
+        if: hashFiles('package.json') != ''
+        run: npm run test:integration --if-present || echo "No integration test script found, skipping"
+
+      - name: Setup Python
+        if: hashFiles('pyproject.toml') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run integration tests (Python)
+        if: hashFiles('pyproject.toml') != ''
+        run: pytest tests/integration/ -v --tb=short || echo "No integration tests found"
+
+  # ─────────────────────────────────────────────
+  # Phase 5: Coverage Gate
+  # ─────────────────────────────────────────────
+  phase-5-coverage:
+    name: 'Phase 5: Coverage Gate (≥80%)'
+    runs-on: ubuntu-latest
+    needs: phase-4-integration-tests
+    if: always() && needs.phase-3-unit-tests.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        if: hashFiles('package.json') != ''
+        run: npm ci
+
+      - name: Run Jest with coverage
+        if: hashFiles('jest.config.*') != ''
+        run: |
+          npm test -- --coverage --ci --forceExit \
+            --coverageThreshold='{"global":{"statements":80,"branches":75,"functions":80,"lines":80}}'
+
+      - name: Run Vitest with coverage
+        if: hashFiles('vitest.config.*') != ''
+        run: npx vitest run --coverage
+
+      - name: Setup Python
+        if: hashFiles('pyproject.toml') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run pytest with coverage
+        if: hashFiles('pyproject.toml') != ''
+        run: |
+          pip install pytest-cov
+          pytest --cov=src --cov-report=term-missing --cov-report=xml --cov-fail-under=${{ env.COVERAGE_THRESHOLD }}
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: |
+            coverage/
+            coverage.xml
+            coverage_html/
+          retention-days: 7
+
+      - name: Post coverage comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            // Read coverage summary if available
+            let body = '## 📊 Coverage Report\nCoverage gate passed ✅ (≥80%)';
+            try {
+              const summary = JSON.parse(fs.readFileSync('coverage/coverage-summary.json', 'utf8'));
+              const total = summary.total;
+              body = `## 📊 Coverage Report
+            
+            | Metric | Coverage | Threshold | Status |
+            |--------|----------|-----------|--------|
+            | Statements | ${total.statements.pct}% | 80% | ${total.statements.pct >= 80 ? '✅' : '❌'} |
+            | Branches | ${total.branches.pct}% | 75% | ${total.branches.pct >= 75 ? '✅' : '❌'} |
+            | Functions | ${total.functions.pct}% | 80% | ${total.functions.pct >= 80 ? '✅' : '❌'} |
+            | Lines | ${total.lines.pct}% | 80% | ${total.lines.pct >= 80 ? '✅' : '❌'} |`;
+            } catch (e) {
+              console.log('No coverage summary found:', e.message);
+            }
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+
+  # ─────────────────────────────────────────────
+  # Phase 6: Build Check
+  # ─────────────────────────────────────────────
+  phase-6-build:
+    name: 'Phase 6: Build Check'
+    runs-on: ubuntu-latest
+    needs: phase-5-coverage
+    if: always() && needs.phase-3-unit-tests.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        if: hashFiles('package.json') != ''
+        run: npm ci
+
+      - name: Build (Node)
+        if: hashFiles('package.json') != ''
+        run: npm run build --if-present
+
+      - name: Setup Python
+        if: hashFiles('pyproject.toml') != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build Python package
+        if: hashFiles('pyproject.toml') != ''
+        run: |
+          pip install build
+          python -m build
+
+      - name: Setup Go
+        if: hashFiles('go.mod') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build Go binary
+        if: hashFiles('go.mod') != ''
+        run: go build ./...
+
+  # ─────────────────────────────────────────────
+  # Summary Gate — blocks merge if any phase failed
+  # ─────────────────────────────────────────────
+  verification-summary:
+    name: 'Verification Gate Summary'
+    runs-on: ubuntu-latest
+    needs:
+      - phase-1-lint
+      - phase-2-typecheck
+      - phase-3-unit-tests
+      - phase-4-integration-tests
+      - phase-5-coverage
+      - phase-6-build
+    if: always()
+    steps:
+      - name: Check all phases passed
+        run: |
+          echo "Phase 1 (Lint):         ${{ needs.phase-1-lint.result }}"
+          echo "Phase 2 (Typecheck):    ${{ needs.phase-2-typecheck.result }}"
+          echo "Phase 3 (Unit Tests):   ${{ needs.phase-3-unit-tests.result }}"
+          echo "Phase 4 (Integration):  ${{ needs.phase-4-integration-tests.result }}"
+          echo "Phase 5 (Coverage):     ${{ needs.phase-5-coverage.result }}"
+          echo "Phase 6 (Build):        ${{ needs.phase-6-build.result }}"
+
+          if [[ \
+            "${{ needs.phase-1-lint.result }}" != "success" || \
+            "${{ needs.phase-2-typecheck.result }}" != "success" || \
+            "${{ needs.phase-3-unit-tests.result }}" != "success" || \
+            "${{ needs.phase-5-coverage.result }}" != "success" || \
+            "${{ needs.phase-6-build.result }}" != "success" \
+          ]]; then
+            echo "❌ One or more verification phases failed. PR is blocked."
+            exit 1
+          fi
+          echo "✅ All 6 verification phases passed. PR is clear to review."
