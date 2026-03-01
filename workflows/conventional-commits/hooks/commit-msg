@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Xomware Conventional Commits — commit-msg hook
+#
+# Validates that every commit message follows the Conventional Commits standard:
+#   type(optional-scope): description
+#
+# Install via: bash workflows/conventional-commits/setup.sh
+# ==============================================================================
+
+set -euo pipefail
+
+COMMIT_MSG_FILE="${1:-}"
+if [[ -z "$COMMIT_MSG_FILE" ]]; then
+  echo "❌ commit-msg hook: no commit message file provided." >&2
+  exit 1
+fi
+
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Strip comment lines (lines starting with #)
+FIRST_LINE=$(echo "$COMMIT_MSG" | grep -v '^#' | head -n 1)
+
+# ──────────────────────────────────────────────
+# Allowed types
+# ──────────────────────────────────────────────
+ALLOWED_TYPES="feat|fix|refactor|docs|test|chore|perf|ci|build|revert"
+
+# ──────────────────────────────────────────────
+# Regex pattern:
+#   type(scope)!: description
+#   or
+#   type!: description
+# ──────────────────────────────────────────────
+PATTERN="^(${ALLOWED_TYPES})(\([a-z0-9._-]+\))?(!)?: .{10,}$"
+
+# ──────────────────────────────────────────────
+# Run validation
+# ──────────────────────────────────────────────
+if ! echo "$FIRST_LINE" | grep -qE "$PATTERN"; then
+
+  # Attempt to diagnose the specific problem for a helpful error
+  TYPE_PART=$(echo "$FIRST_LINE" | grep -oE "^[a-zA-Z]+" || true)
+
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════════╗"
+  echo "║          ❌  Invalid Conventional Commit Message             ║"
+  echo "╚══════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "  Your message:"
+  echo "    \"${FIRST_LINE}\""
+  echo ""
+
+  # Specific hints
+  if [[ -z "$TYPE_PART" ]]; then
+    echo "  ⚠️  Missing commit type."
+  elif ! echo "$TYPE_PART" | grep -qE "^(${ALLOWED_TYPES})$"; then
+    echo "  ⚠️  Unknown type: '${TYPE_PART}'"
+    echo "     Allowed types: feat, fix, refactor, docs, test, chore, perf, ci, build, revert"
+  else
+    DESC=$(echo "$FIRST_LINE" | sed -E "s/^(${ALLOWED_TYPES})(\([^)]+\))?(!)?: //" || true)
+    if [[ ${#DESC} -lt 10 ]]; then
+      echo "  ⚠️  Description is too short (${#DESC} chars). Minimum is 10 characters."
+    fi
+  fi
+
+  echo ""
+  echo "  Required format:"
+  echo "    type(optional-scope): description (min 10 chars)"
+  echo ""
+  echo "  Allowed types:"
+  echo "    feat      – new feature"
+  echo "    fix       – bug fix"
+  echo "    refactor  – code restructuring"
+  echo "    docs      – documentation"
+  echo "    test      – tests"
+  echo "    chore     – tooling / maintenance"
+  echo "    perf      – performance improvement"
+  echo "    ci        – CI/CD changes"
+  echo "    build     – build system changes"
+  echo "    revert    – revert a prior commit"
+  echo ""
+  echo "  Examples:"
+  echo "    feat(auth): add OAuth2 login with Google"
+  echo "    fix(api): handle null response from payment provider"
+  echo "    docs(readme): update local development setup steps"
+  echo "    chore(deps): upgrade express to v4.18.2"
+  echo "    feat!: remove deprecated user endpoint"
+  echo ""
+  echo "  See: workflows/conventional-commits/WORKFLOW.md"
+  echo ""
+  exit 1
+fi
+
+echo "✅ Commit message format is valid."
+exit 0

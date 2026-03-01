@@ -1,0 +1,17 @@
+{
+  "_comment": "Claude agent hook registrations for xom-claude-workflows. See https://docs.anthropic.com/claude/hooks",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "description": "Block dev server commands (npm run dev, uvicorn, etc.) when not inside a tmux session",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node workflows/tmux-enforcement/hooks/pre-bash-tmux-check.js"
+          }
+        ]
+      }
+    ]
+  }
+}
